@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Bar,
   BarChart,
@@ -30,10 +31,19 @@ import {
 } from "@/lib/aggregate";
 import { detectOutliers } from "@/lib/insights";
 import { compact, shortLabel, shortLocation } from "@/lib/labels";
+import {
+  buildDashboardUrl,
+  DEFAULT_VIEW,
+  parseDashboardUrl,
+  trailFromFilters,
+  type DashboardView,
+} from "@/lib/url-state";
 import { ChartLegend, FilterSelect, KpiCard, SectionHead, SheetIcon } from "./ui";
+import ViewTabs from "./ViewTabs";
 import CategoryShift from "./widgets/CategoryShift";
 import CoverageHeatmap from "./widgets/CoverageHeatmap";
 import DataQualityPanel from "./widgets/DataQualityPanel";
+import ProvinceMap from "./widgets/ProvinceMap";
 import TransferPanel from "./widgets/TransferPanel";
 
 const SHARE_COLORS = ["#e11d48", "#0f766e", "#0369a1", "#d97706", "#64748b", "#7c3aed"];
@@ -45,7 +55,6 @@ const UNMET_LATE_COLOR = "#b45309";
 /** Analysis parameters (thresholds/limits, not data) */
 const CONCENTRATION_ALERT_SHARE = 0.5;
 const TOP_SHORTAGE_LOCATIONS = 12;
-const MAX_TABLE_ROWS = 200;
 
 const DEFAULT_FILTERS: Filters = {
   period: "2026",
@@ -73,33 +82,46 @@ const tooltipStyle = {
 };
 
 export default function Dashboard() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const urlHydrated = useRef(false);
+
   const [data, setData] = useState<DashboardPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [trail, setTrail] = useState<DrillStep[]>([]);
+  const [view, setView] = useState<DashboardView>(DEFAULT_VIEW);
   const [excludeTopLoc, setExcludeTopLoc] = useState(false);
   const [hoverShare, setHoverShare] = useState<string | null>(null);
   const [excludeOutliers, setExcludeOutliers] = useState(false);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/data");
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? "Failed to load data");
-      setData(json);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [reloadSeq, setReloadSeq] = useState(0);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+
+    async function loadData() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/data");
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? "Failed to load data");
+        if (!cancelled) setData(json);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadSeq]);
 
   const rows = useMemo(
     () => (data ? filterRecords(data.records, filters) : []),
@@ -135,7 +157,44 @@ export default function Dashboard() {
     }
     return map;
   }, [data]);
-  const projectShort = (p: string) => categoryOfProject.get(p) ?? p;
+  const projectShort = useCallback(
+    (p: string) => categoryOfProject.get(p) ?? p,
+    [categoryOfProject],
+  );
+
+  const syncUrl = useCallback(
+    (nextFilters: Filters, nextView: DashboardView) => {
+      router.replace(`${pathname}${buildDashboardUrl(nextFilters, nextView)}`, { scroll: false });
+    },
+    [pathname, router],
+  );
+
+  const applyDashboardState = useCallback(
+    (nextFilters: Filters, nextTrail: DrillStep[], nextView: DashboardView = view) => {
+      setFilters(nextFilters);
+      setTrail(nextTrail);
+      setView(nextView);
+      syncUrl(nextFilters, nextView);
+    },
+    [syncUrl, view],
+  );
+
+  const changeView = useCallback(
+    (nextView: DashboardView) => {
+      setView(nextView);
+      syncUrl(filters, nextView);
+    },
+    [filters, syncUrl],
+  );
+
+  useEffect(() => {
+    if (!data || urlHydrated.current) return;
+    const parsed = parseDashboardUrl(searchParams);
+    setFilters(parsed.filters);
+    setTrail(trailFromFilters(parsed.filters, projectShort));
+    setView(parsed.view);
+    urlHydrated.current = true;
+  }, [data, searchParams, projectShort]);
 
   const byMaterial = useMemo(
     () => aggregateBy(scoped, "material", filters.period).sort((a, b) => b.demand - a.demand),
@@ -245,8 +304,10 @@ export default function Dashboard() {
 
   /** Drill one dimension; replaces any existing step of the same key */
   function drillTo(step: DrillStep, opts?: { scroll?: boolean }) {
-    setTrail((prev) => sortTrail([...prev.filter((s) => s.key !== step.key), step]));
-    setFilters((prev) => ({ ...prev, [step.key]: step.value }));
+    const nextTrail = sortTrail([...trail.filter((s) => s.key !== step.key), step]);
+    const nextFilters = { ...filters, [step.key]: step.value };
+    const nextView = opts?.scroll !== false ? "details" : view;
+    applyDashboardState(nextFilters, nextTrail, nextView);
     if (opts?.scroll !== false) {
       queueMicrotask(scrollToTable);
     }
@@ -256,59 +317,46 @@ export default function Dashboard() {
   function drillPath(steps: DrillStep[], opts?: { scroll?: boolean }) {
     const byKey = new Map<DrillStep["key"], DrillStep>();
     for (const s of steps) byKey.set(s.key, s);
-    const next = sortTrail([...byKey.values()]);
-    setTrail(next);
-    setFilters((prev) => {
-      const nextFilters: Filters = {
-        ...prev,
-        project: "All",
-        material: "All",
-        location: "All",
-      };
-      for (const s of next) nextFilters[s.key] = s.value;
-      return nextFilters;
-    });
+    const nextTrail = sortTrail([...byKey.values()]);
+    const nextFilters: Filters = {
+      ...filters,
+      project: "All",
+      material: "All",
+      location: "All",
+    };
+    for (const s of nextTrail) nextFilters[s.key] = s.value;
+    const nextView = opts?.scroll !== false ? "details" : view;
+    applyDashboardState(nextFilters, nextTrail, nextView);
     if (opts?.scroll !== false) {
       queueMicrotask(scrollToTable);
     }
   }
 
   function goBreadcrumb(index: number) {
-    // index -1 = All (root)
     if (index < 0) {
-      setTrail([]);
-      setFilters((prev) => ({
-        ...prev,
-        project: "All",
-        material: "All",
-        location: "All",
-      }));
+      applyDashboardState(DEFAULT_FILTERS, [], view);
       return;
     }
-    const next = trail.slice(0, index + 1);
-    setTrail(next);
-    setFilters((prev) => {
-      const nextFilters: Filters = {
-        ...prev,
-        project: "All",
-        material: "All",
-        location: "All",
-      };
-      for (const s of next) {
-        nextFilters[s.key] = s.value;
-      }
-      return nextFilters;
-    });
+    const nextTrail = trail.slice(0, index + 1);
+    const nextFilters: Filters = {
+      ...filters,
+      project: "All",
+      material: "All",
+      location: "All",
+    };
+    for (const s of nextTrail) nextFilters[s.key] = s.value;
+    applyDashboardState(nextFilters, nextTrail, view);
   }
 
   function resetFilters() {
-    setFilters(DEFAULT_FILTERS);
-    setTrail([]);
     setExcludeTopLoc(false);
+    applyDashboardState(DEFAULT_FILTERS, [], DEFAULT_VIEW);
   }
 
   function scrollToTable() {
-    document.getElementById("detail-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    queueMicrotask(() => {
+      document.getElementById("detail-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   if (loading) {
@@ -326,7 +374,7 @@ export default function Dashboard() {
         <p className="mt-2 text-sm text-[var(--muted)]">{error}</p>
         <button
           type="button"
-          onClick={load}
+          onClick={() => setReloadSeq((seq) => seq + 1)}
           className="mt-4 rounded-full bg-[var(--accent-deep)] px-5 py-2.5 text-sm font-semibold text-white"
         >
           Retry
@@ -347,7 +395,7 @@ export default function Dashboard() {
           : "overview";
 
   return (
-    <div className="mx-auto max-w-[1520px] px-5 py-8 md:px-6">
+    <main id="main-content" className="mx-auto max-w-[1520px] px-5 py-8 md:px-6">
       <header className="panel rise-in mb-5 overflow-hidden p-7 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -427,7 +475,10 @@ export default function Dashboard() {
             { value: "2026", label: pLabels[0] },
             { value: "2730", label: pLabels[1] },
           ]}
-          onChange={(v) => setFilters((p) => ({ ...p, period: v as Period }))}
+          onChange={(v) => {
+            const nextFilters = { ...filters, period: v as Period };
+            applyDashboardState(nextFilters, trail, view);
+          }}
         />
         <FilterSelect
           label="Project"
@@ -438,10 +489,10 @@ export default function Dashboard() {
           ]}
           onChange={(v) => {
             if (v === "All") {
-              setTrail((prev) => prev.filter((s) => s.key !== "project"));
-              setFilters((p) => ({ ...p, project: "All" }));
+              const nextTrail = trail.filter((s) => s.key !== "project");
+              applyDashboardState({ ...filters, project: "All" }, nextTrail, view);
             } else {
-              drillTo({ key: "project", value: v, label: projectShort(v) });
+              drillTo({ key: "project", value: v, label: projectShort(v) }, { scroll: false });
             }
           }}
         />
@@ -454,10 +505,10 @@ export default function Dashboard() {
           ]}
           onChange={(v) => {
             if (v === "All") {
-              setTrail((prev) => prev.filter((s) => s.key !== "material"));
-              setFilters((p) => ({ ...p, material: "All" }));
+              const nextTrail = trail.filter((s) => s.key !== "material");
+              applyDashboardState({ ...filters, material: "All" }, nextTrail, view);
             } else {
-              drillTo({ key: "material", value: v, label: v });
+              drillTo({ key: "material", value: v, label: v }, { scroll: false });
             }
           }}
         />
@@ -470,10 +521,10 @@ export default function Dashboard() {
           ]}
           onChange={(v) => {
             if (v === "All") {
-              setTrail((prev) => prev.filter((s) => s.key !== "location"));
-              setFilters((p) => ({ ...p, location: "All" }));
+              const nextTrail = trail.filter((s) => s.key !== "location");
+              applyDashboardState({ ...filters, location: "All" }, nextTrail, view);
             } else {
-              drillTo({ key: "location", value: v, label: v });
+              drillTo({ key: "location", value: v, label: v }, { scroll: false });
             }
           }}
         />
@@ -487,7 +538,7 @@ export default function Dashboard() {
           </button>
           <button
             type="button"
-            onClick={load}
+            onClick={() => setReloadSeq((seq) => seq + 1)}
             className="w-full rounded-xl bg-[var(--accent-deep)] px-3 py-2.5 text-sm font-bold text-white transition hover:brightness-110"
           >
             Refresh
@@ -541,7 +592,10 @@ export default function Dashboard() {
         )}
         <button
           type="button"
-          onClick={scrollToTable}
+          onClick={() => {
+            changeView("details");
+            queueMicrotask(scrollToTable);
+          }}
           className="rounded-full border border-[var(--line)] px-3 py-1 text-xs font-semibold text-[var(--ink)] hover:bg-[#f8fafc]"
         >
           View rows ↓
@@ -641,8 +695,16 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mb-5 grid gap-5 lg:grid-cols-2">
-        <div className="panel rise-in p-5" style={{ animationDelay: "80ms" }}>
+      <ViewTabs view={view} onChange={changeView} />
+
+      {view === "overview" && (
+        <div
+          id="panel-overview"
+          role="tabpanel"
+          aria-labelledby="tab-overview"
+          className="mb-5 space-y-5"
+        >
+      <div className="panel rise-in p-5" style={{ animationDelay: "80ms" }}>
           <SectionHead
             title={
               drillLevel === "overview"
@@ -660,7 +722,7 @@ export default function Dashboard() {
             Demand <strong className="text-[var(--ink)]">{fmt(t.demand)}</strong> vs supply{" "}
             <strong className="text-[var(--ink)]">{fmt(t.supply)}</strong> → coverage{" "}
             <strong className="text-[var(--ink)]">{pct(coverage)}</strong>, unmet{" "}
-            <strong className="text-[var(--bad)]">{fmt(t.unmet)}</strong> (1,000 m³).
+            <strong className="text-[var(--bad)]">{fmt(t.unmet)}</strong> ({unit}).
           </p>
 
           {drillLevel === "overview" && dominant && topLoc && (
@@ -792,15 +854,284 @@ export default function Dashboard() {
           )}
         </div>
 
-        <DataQualityPanel
-          integrity={data.integrity}
-          recordsInScope={scoped.length}
-          surplusRowsInScope={scoped.filter((r) => r[f.b] > 0).length}
-          basePeriodLabel={pLabels[0]}
-        />
-      </div>
+      {/* Unmet share hero */}
+        <div className="panel p-5">
+          <SectionHead
+            title="Unmet share by material"
+            subtitle={
+              dominant
+                ? `${dominant.name} drives ${pct(dominant.share)} of shortage`
+                : "No unmet demand in this view"
+            }
+          />
+          <div className="mt-4 flex flex-col gap-5 sm:flex-row sm:items-center">
+            <div className="mx-auto h-[200px] w-[200px] shrink-0 sm:mx-0">
+              <div className="chart-clickable h-full w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={shareRows}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={62}
+                      outerRadius={88}
+                      paddingAngle={2.5}
+                      stroke="#fff"
+                      strokeWidth={3}
+                      onMouseEnter={(_, i) => setHoverShare(shareRows[i]?.name ?? null)}
+                      onMouseLeave={() => setHoverShare(null)}
+                      onClick={(_, index) => {
+                        const item = shareRows[index ?? 0];
+                        if (item)
+                          drillTo({ key: "material", value: item.name, label: item.name });
+                      }}
+                    >
+                      {shareRows.map((d) => (
+                        <Cell
+                          key={d.name}
+                          fill={d.color}
+                          opacity={hoverShare && hoverShare !== d.name ? 0.35 : 1}
+                        />
+                      ))}
+                      <Label
+                        content={({ viewBox }) => {
+                          if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) return null;
+                          const { cx, cy } = viewBox;
+                          return (
+                            <g>
+                              <text
+                                x={cx}
+                                y={cy - 16}
+                                textAnchor="middle"
+                                className="fill-[var(--muted)]"
+                                style={{
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  letterSpacing: "0.14em",
+                                }}
+                              >
+                                TOTAL UNMET
+                              </text>
+                              <text
+                                x={cx}
+                                y={cy + 6}
+                                textAnchor="middle"
+                                className="fill-[var(--ink)]"
+                                style={{
+                                  fontSize: 22,
+                                  fontWeight: 600,
+                                  fontFamily: "var(--font-fraunces), Georgia, serif",
+                                }}
+                              >
+                                {fmt(t.unmet)}
+                              </text>
+                              <text
+                                x={cx}
+                                y={cy + 24}
+                                textAnchor="middle"
+                                className="fill-[var(--muted)]"
+                                style={{ fontSize: 10 }}
+                              >
+                                {unit}
+                              </text>
+                            </g>
+                          );
+                        }}
+                      />
+                    </Pie>
+                    <Tooltip
+                      {...tooltipStyle}
+                      formatter={(v, _n, item) => {
+                        const row = item?.payload as { share?: number } | undefined;
+                        return [`${fmt(Number(v))} (${pct(row?.share ?? 0)})`, "Unmet"];
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
 
-      <div className="mb-5 grid gap-5 lg:grid-cols-2">
+            <div className="flex min-w-0 flex-1 flex-col justify-center gap-2.5">
+              <div className="flex h-3 overflow-hidden rounded-full bg-[#eef2f7]">
+                {shareRows.map((d) => (
+                  <button
+                    key={d.name}
+                    type="button"
+                    title={`${d.name}: ${pct(d.share)}`}
+                    className="h-full transition-[filter] duration-200 hover:brightness-110"
+                    style={{
+                      width: `${Math.max(d.share * 100, 0.8)}%`,
+                      background: d.color,
+                      opacity: hoverShare && hoverShare !== d.name ? 0.35 : 1,
+                    }}
+                    onMouseEnter={() => setHoverShare(d.name)}
+                    onMouseLeave={() => setHoverShare(null)}
+                    onClick={() => drillTo({ key: "material", value: d.name, label: d.name })}
+                  />
+                ))}
+              </div>
+
+              <ul className="mt-1 space-y-1.5">
+                {shareRows.map((d, i) => (
+                  <li key={d.name}>
+                    <button
+                      type="button"
+                      className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#f8fafc]"
+                      onMouseEnter={() => setHoverShare(d.name)}
+                      onMouseLeave={() => setHoverShare(null)}
+                      onClick={() => drillTo({ key: "material", value: d.name, label: d.name })}
+                      style={{
+                        opacity: hoverShare && hoverShare !== d.name ? 0.45 : 1,
+                      }}
+                    >
+                      <div className="flex items-baseline justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ background: d.color }}
+                          />
+                          <span className="truncate text-sm font-semibold text-[var(--ink)]">
+                            <span className="mr-1.5 text-[10px] font-bold text-[var(--muted)]">
+                              {String(i + 1).padStart(2, "0")}
+                            </span>
+                            {d.name}
+                          </span>
+                        </div>
+                        <span className="kpi-value shrink-0 text-sm font-bold tabular-nums">
+                          {pct(d.share)}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2 pl-[18px]">
+                        <div className="share-track flex-1">
+                          <div
+                            className="share-fill"
+                            style={{
+                              width: `${d.share * 100}%`,
+                              background: d.color,
+                            }}
+                          />
+                        </div>
+                        <span className="kpi-value w-[4.5rem] text-right text-[11px] text-[var(--muted)]">
+                          {fmt(d.value)}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <ProvinceMap
+          locationAgg={byLocationAll}
+          periodLabel={pLabel}
+          selectedLocation={filters.location}
+          materialFilter={filters.material}
+          onDrill={(l) => drillTo({ key: "location", value: l, label: l })}
+        />
+
+        <div className="panel p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <SectionHead
+              title={
+                filters.material !== "All"
+                  ? `Shortage locations · ${filters.material}`
+                  : "Top shortage locations"
+              }
+              subtitle={
+                hiddenTopLoc
+                  ? `Peers only — #1 ${shortLocation(hiddenTopLoc.name)} hidden (${pct(hiddenTopLoc.unmet / (t.unmet || 1))} of unmet)`
+                  : `Top ${locationRank.length} of ${byLocationAll.length} by unmet`
+              }
+            />
+            {byLocationAll.length > 1 && byLocationAll[0] && byLocationAll[0].unmet / (t.unmet || 1) > 0.4 && (
+              <button
+                type="button"
+                onClick={() => setExcludeTopLoc((v) => !v)}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold transition ${
+                  excludeTopLoc
+                    ? "bg-sky-600 text-white"
+                    : "border border-[var(--line)] bg-white text-[var(--ink)] hover:bg-[#f8fafc]"
+                }`}
+              >
+                {excludeTopLoc ? "Show #1 again" : "Hide #1 · see peers"}
+              </button>
+            )}
+          </div>
+
+          {hiddenTopLoc && (
+            <button
+              type="button"
+              onClick={() =>
+                drillTo({ key: "location", value: hiddenTopLoc.name, label: hiddenTopLoc.name })
+              }
+              className="mt-3 flex w-full items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-left text-xs transition hover:bg-rose-50"
+            >
+              <span>
+                <span className="font-bold text-rose-800">#1 {hiddenTopLoc.name}</span>
+                <span className="text-rose-700/80"> still {pct(hiddenTopLoc.unmet / (t.unmet || 1))} of unmet — click to drill</span>
+              </span>
+              <span className="kpi-value shrink-0 font-bold text-rose-800">{fmt(hiddenTopLoc.unmet)}</span>
+            </button>
+          )}
+
+          <ul className="mt-3 space-y-1">
+            {locationRank.map((d) => (
+              <li key={d.name}>
+                <button
+                  type="button"
+                  onClick={() => drillTo({ key: "location", value: d.name, label: d.name })}
+                  className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#fff1f2]"
+                  title={`${d.name} · unmet ${fmt(d.unmet)} · ${pct(d.shareOfScope)} of scope`}
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="w-5 shrink-0 text-[10px] font-bold tabular-nums text-[var(--muted)]">
+                        {String(d.rank).padStart(2, "0")}
+                      </span>
+                      <span className="truncate text-sm font-semibold text-[var(--ink)] group-hover:text-rose-800">
+                        {d.short}
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-baseline gap-2">
+                      <span className="kpi-value text-[11px] font-bold text-rose-700">
+                        {pct(d.shareOfScope)}
+                      </span>
+                      <span className="kpi-value w-[3.6rem] text-right text-xs text-[var(--muted)]">
+                        {fmt(d.unmet)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-1.5 ml-7 h-1.5 overflow-hidden rounded-full bg-[#eef2f7]">
+                    <div
+                      className="h-full rounded-full transition-[width] duration-500"
+                      style={{ width: `${d.barPct}%`, background: d.color }}
+                    />
+                  </div>
+                </button>
+              </li>
+            ))}
+            {locationRank.length === 0 && (
+              <li className="px-2 py-6 text-center text-sm text-[var(--muted)]">
+                No unmet shortage in this scope
+              </li>
+            )}
+          </ul>
+        </div>
+        </div>
+      )}
+
+      {view === "analysis" && (
+        <div
+          id="panel-analysis"
+          role="tabpanel"
+          aria-labelledby="tab-analysis"
+          className="mb-5 space-y-5"
+        >
+      <div className="grid gap-5 lg:grid-cols-2">
         <TransferPanel
           rows={scoped}
           period={filters.period}
@@ -812,7 +1143,7 @@ export default function Dashboard() {
         <CategoryShift rows={scoped} periods={pLabels} />
       </div>
 
-      <div className="mb-5 grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-2">
         <div className="panel p-5">
           <SectionHead
             title="Period comparison"
@@ -1009,268 +1340,7 @@ export default function Dashboard() {
             ]}
           />
         </div>
-
-        {/* Fixed center label via SVG Label — not HTML overlay */}
-        <div className="panel p-5">
-          <SectionHead
-            title="Unmet share by material"
-            subtitle={
-              dominant
-                ? `${dominant.name} drives ${pct(dominant.share)} of shortage`
-                : "No unmet demand in this view"
-            }
-          />
-          <div className="mt-4 flex flex-col gap-5 sm:flex-row sm:items-center">
-            <div className="mx-auto h-[200px] w-[200px] shrink-0 sm:mx-0">
-              <div className="chart-clickable h-full w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={shareRows}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={62}
-                      outerRadius={88}
-                      paddingAngle={2.5}
-                      stroke="#fff"
-                      strokeWidth={3}
-                      onMouseEnter={(_, i) => setHoverShare(shareRows[i]?.name ?? null)}
-                      onMouseLeave={() => setHoverShare(null)}
-                      onClick={(_, index) => {
-                        const item = shareRows[index ?? 0];
-                        if (item)
-                          drillTo({ key: "material", value: item.name, label: item.name });
-                      }}
-                    >
-                      {shareRows.map((d) => (
-                        <Cell
-                          key={d.name}
-                          fill={d.color}
-                          opacity={hoverShare && hoverShare !== d.name ? 0.35 : 1}
-                        />
-                      ))}
-                      <Label
-                        content={({ viewBox }) => {
-                          if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) return null;
-                          const { cx, cy } = viewBox;
-                          return (
-                            <g>
-                              <text
-                                x={cx}
-                                y={cy - 16}
-                                textAnchor="middle"
-                                className="fill-[var(--muted)]"
-                                style={{
-                                  fontSize: 9,
-                                  fontWeight: 700,
-                                  letterSpacing: "0.14em",
-                                }}
-                              >
-                                TOTAL UNMET
-                              </text>
-                              <text
-                                x={cx}
-                                y={cy + 6}
-                                textAnchor="middle"
-                                className="fill-[var(--ink)]"
-                                style={{
-                                  fontSize: 22,
-                                  fontWeight: 600,
-                                  fontFamily: "var(--font-fraunces), Georgia, serif",
-                                }}
-                              >
-                                {fmt(t.unmet)}
-                              </text>
-                              <text
-                                x={cx}
-                                y={cy + 24}
-                                textAnchor="middle"
-                                className="fill-[var(--muted)]"
-                                style={{ fontSize: 10 }}
-                              >
-                                1,000 m³
-                              </text>
-                            </g>
-                          );
-                        }}
-                      />
-                    </Pie>
-                    <Tooltip
-                      {...tooltipStyle}
-                      formatter={(v, _n, item) => {
-                        const row = item?.payload as { share?: number } | undefined;
-                        return [`${fmt(Number(v))} (${pct(row?.share ?? 0)})`, "Unmet"];
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="flex min-w-0 flex-1 flex-col justify-center gap-2.5">
-              <div className="flex h-3 overflow-hidden rounded-full bg-[#eef2f7]">
-                {shareRows.map((d) => (
-                  <button
-                    key={d.name}
-                    type="button"
-                    title={`${d.name}: ${pct(d.share)}`}
-                    className="h-full transition-[filter] duration-200 hover:brightness-110"
-                    style={{
-                      width: `${Math.max(d.share * 100, 0.8)}%`,
-                      background: d.color,
-                      opacity: hoverShare && hoverShare !== d.name ? 0.35 : 1,
-                    }}
-                    onMouseEnter={() => setHoverShare(d.name)}
-                    onMouseLeave={() => setHoverShare(null)}
-                    onClick={() => drillTo({ key: "material", value: d.name, label: d.name })}
-                  />
-                ))}
-              </div>
-
-              <ul className="mt-1 space-y-1.5">
-                {shareRows.map((d, i) => (
-                  <li key={d.name}>
-                    <button
-                      type="button"
-                      className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#f8fafc]"
-                      onMouseEnter={() => setHoverShare(d.name)}
-                      onMouseLeave={() => setHoverShare(null)}
-                      onClick={() => drillTo({ key: "material", value: d.name, label: d.name })}
-                      style={{
-                        opacity: hoverShare && hoverShare !== d.name ? 0.45 : 1,
-                      }}
-                    >
-                      <div className="flex items-baseline justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span
-                            className="h-2.5 w-2.5 shrink-0 rounded-full"
-                            style={{ background: d.color }}
-                          />
-                          <span className="truncate text-sm font-semibold text-[var(--ink)]">
-                            <span className="mr-1.5 text-[10px] font-bold text-[var(--muted)]">
-                              {String(i + 1).padStart(2, "0")}
-                            </span>
-                            {d.name}
-                          </span>
-                        </div>
-                        <span className="kpi-value shrink-0 text-sm font-bold tabular-nums">
-                          {pct(d.share)}
-                        </span>
-                      </div>
-                      <div className="mt-1.5 flex items-center gap-2 pl-[18px]">
-                        <div className="share-track flex-1">
-                          <div
-                            className="share-fill"
-                            style={{
-                              width: `${d.share * 100}%`,
-                              background: d.color,
-                            }}
-                          />
-                        </div>
-                        <span className="kpi-value w-[4.5rem] text-right text-[11px] text-[var(--muted)]">
-                          {fmt(d.value)}
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
       </div>
-
-      <div className="mb-5 grid gap-5 lg:grid-cols-2">
-        <div className="panel p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <SectionHead
-              title={
-                filters.material !== "All"
-                  ? `Shortage locations · ${filters.material}`
-                  : "Top shortage locations"
-              }
-              subtitle={
-                hiddenTopLoc
-                  ? `Peers only — #1 ${shortLocation(hiddenTopLoc.name)} hidden (${pct(hiddenTopLoc.unmet / (t.unmet || 1))} of unmet)`
-                  : `Top ${locationRank.length} of ${byLocationAll.length} by unmet · Can Tho-scale outlier compresses peers`
-              }
-            />
-            {byLocationAll.length > 1 && byLocationAll[0] && byLocationAll[0].unmet / (t.unmet || 1) > 0.4 && (
-              <button
-                type="button"
-                onClick={() => setExcludeTopLoc((v) => !v)}
-                className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold transition ${
-                  excludeTopLoc
-                    ? "bg-sky-600 text-white"
-                    : "border border-[var(--line)] bg-white text-[var(--ink)] hover:bg-[#f8fafc]"
-                }`}
-              >
-                {excludeTopLoc ? "Show #1 again" : "Hide #1 · see peers"}
-              </button>
-            )}
-          </div>
-
-          {hiddenTopLoc && (
-            <button
-              type="button"
-              onClick={() =>
-                drillTo({ key: "location", value: hiddenTopLoc.name, label: hiddenTopLoc.name })
-              }
-              className="mt-3 flex w-full items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-left text-xs transition hover:bg-rose-50"
-            >
-              <span>
-                <span className="font-bold text-rose-800">#1 {hiddenTopLoc.name}</span>
-                <span className="text-rose-700/80"> still {pct(hiddenTopLoc.unmet / (t.unmet || 1))} of unmet — click to drill</span>
-              </span>
-              <span className="kpi-value shrink-0 font-bold text-rose-800">{fmt(hiddenTopLoc.unmet)}</span>
-            </button>
-          )}
-
-          <ul className="mt-3 space-y-1">
-            {locationRank.map((d) => (
-              <li key={d.name}>
-                <button
-                  type="button"
-                  onClick={() => drillTo({ key: "location", value: d.name, label: d.name })}
-                  className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#fff1f2]"
-                  title={`${d.name} · unmet ${fmt(d.unmet)} · ${pct(d.shareOfScope)} of scope`}
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="w-5 shrink-0 text-[10px] font-bold tabular-nums text-[var(--muted)]">
-                        {String(d.rank).padStart(2, "0")}
-                      </span>
-                      <span className="truncate text-sm font-semibold text-[var(--ink)] group-hover:text-rose-800">
-                        {d.short}
-                      </span>
-                    </div>
-                    <div className="flex shrink-0 items-baseline gap-2">
-                      <span className="kpi-value text-[11px] font-bold text-rose-700">
-                        {pct(d.shareOfScope)}
-                      </span>
-                      <span className="kpi-value w-[3.6rem] text-right text-xs text-[var(--muted)]">
-                        {fmt(d.unmet)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mt-1.5 ml-7 h-1.5 overflow-hidden rounded-full bg-[#eef2f7]">
-                    <div
-                      className="h-full rounded-full transition-[width] duration-500"
-                      style={{ width: `${d.barPct}%`, background: d.color }}
-                    />
-                  </div>
-                </button>
-              </li>
-            ))}
-            {locationRank.length === 0 && (
-              <li className="px-2 py-6 text-center text-sm text-[var(--muted)]">
-                No unmet shortage in this scope
-              </li>
-            )}
-          </ul>
-        </div>
 
         <div className="panel p-5">
           <SectionHead
@@ -1354,7 +1424,22 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-      </div>
+        </div>
+      )}
+
+      {view === "details" && (
+        <div
+          id="panel-details"
+          role="tabpanel"
+          aria-labelledby="tab-details"
+          className="mb-5 space-y-5"
+        >
+        <DataQualityPanel
+          integrity={data.integrity}
+          recordsInScope={scoped.length}
+          surplusRowsInScope={scoped.filter((r) => r[f.b] > 0).length}
+          basePeriodLabel={pLabels[0]}
+        />
 
       <CoverageHeatmap
         rows={scoped}
@@ -1460,6 +1545,8 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+        </div>
+      )}
 
       <footer className="panel mb-2 flex flex-wrap items-center justify-between gap-3 px-5 py-4 text-xs text-[var(--muted)]">
         <p>
@@ -1485,6 +1572,6 @@ export default function Dashboard() {
           </a>
         </div>
       </footer>
-    </div>
+    </main>
   );
 }

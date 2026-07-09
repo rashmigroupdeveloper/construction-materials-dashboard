@@ -33,7 +33,10 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ```env
 GOOGLE_SHEET_ID=1Hn6HBQcVP6vSvNm5I1W31Onttal9czN5_-h68ZEGmVY
+NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN=pk.your_mapbox_token
 ```
+
+Get a free Mapbox token at [account.mapbox.com/access-tokens](https://account.mapbox.com/access-tokens/) (required for the interactive province map).
 
 ## API
 
@@ -42,10 +45,22 @@ GOOGLE_SHEET_ID=1Hn6HBQcVP6vSvNm5I1W31Onttal9czN5_-h68ZEGmVY
 ## Features
 
 - Live data from Google Sheets (Refresh button + server revalidation)
-- KPI cards, period comparison, gap bridge, material/location charts
-- Drill-down filters via chart clicks
-- Concentration outlier alert (when top locality >50% of unmet)
-- Detail table with search filters
+- **Story-first layout** — Overview / Analysis / Details tabs reduce cognitive load
+- **Shareable URLs** — filters and drill state sync to query params (`?material=…&location=…&view=details`)
+- KPI cards, province map, coverage heatmap, reallocation panel
+- Drill-down filters via chart clicks and breadcrumb trail
+- Concentration and outlier alerts for skewed distributions
+- Detail table with row-level drill
+
+### URL parameters
+
+| Param | Values | Example |
+|-------|--------|---------|
+| `period` | `2026`, `2730` | `?period=2730` |
+| `project` | sheet project name | `?project=…` |
+| `material` | sheet material name | `?material=Filling+sand` |
+| `location` | sheet locality | `?location=Can+Tho` |
+| `view` | `overview`, `analysis`, `details` | `?view=analysis` |
 
 ## Build & deploy
 
@@ -54,7 +69,14 @@ npm run build
 npm start
 ```
 
-Deploy to Vercel — set `GOOGLE_SHEET_ID` in project environment variables.
+### Vercel
+
+```bash
+cd dashboard-next
+npx vercel --prod
+```
+
+Set `GOOGLE_SHEET_ID` and `NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN` in the Vercel project environment variables. The sheet must remain publicly viewable.
 
 ## Legacy HTML dashboard
 

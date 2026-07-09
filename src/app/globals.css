@@ -19,8 +19,8 @@
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--ink);
-  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: ui-serif, Georgia, Cambria, "Times New Roman", serif;
 }
 
 body {
@@ -34,7 +34,7 @@ body {
 }
 
 .font-display {
-  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-family: var(--font-display);
 }
 
 .panel {
@@ -88,6 +88,52 @@ body {
 
 .rise-in {
   animation: rise-in 0.55s var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise-in {
+    animation: none;
+  }
+
+  .share-fill,
+  .chart-clickable :is(.recharts-bar-rectangle, .recharts-sector, .recharts-scatter-symbol) {
+    transition: none;
+  }
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  z-index: 100;
+}
+
+.skip-link:focus {
+  left: 1rem;
+  top: 1rem;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.75rem;
+  background: var(--accent-deep);
+  color: white;
+  font-weight: 700;
+  font-size: 0.875rem;
+  box-shadow: var(--panel-shadow);
+}
+
+.province-map-popup .mapboxgl-popup-content {
+  border-radius: 0.85rem;
+  padding: 0.65rem 0.8rem;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+}
+
+.province-map-popup .mapboxgl-popup-tip {
+  border-top-color: white;
 }
 
 .share-track {
