@@ -31,15 +31,8 @@ import {
 } from "@/lib/aggregate";
 import { detectOutliers } from "@/lib/insights";
 import { compact, shortLabel, shortLocation } from "@/lib/labels";
-import {
-  buildDashboardUrl,
-  DEFAULT_VIEW,
-  parseDashboardUrl,
-  trailFromFilters,
-  type DashboardView,
-} from "@/lib/url-state";
+import { buildDashboardUrl, parseDashboardUrl, trailFromFilters } from "@/lib/url-state";
 import { ChartLegend, FilterSelect, KpiCard, SectionHead, SheetIcon } from "./ui";
-import ViewTabs from "./ViewTabs";
 import CategoryShift from "./widgets/CategoryShift";
 import CoverageHeatmap from "./widgets/CoverageHeatmap";
 import DataQualityPanel from "./widgets/DataQualityPanel";
@@ -69,6 +62,29 @@ type DrillStep = {
   label: string;
 };
 
+/** Numbered heading between page sections — the whole dashboard is one scroll */
+function SectionDivider({
+  index,
+  title,
+  desc,
+}: {
+  index: number;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <div className="mb-4 mt-9 flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1">
+      <span className="flex h-7 w-7 shrink-0 translate-y-1 items-center justify-center rounded-full bg-[var(--accent-deep)] text-xs font-black text-white">
+        {index}
+      </span>
+      <h2 className="font-display text-2xl font-semibold tracking-tight text-[var(--ink)]">
+        {title}
+      </h2>
+      <span className="text-sm text-[var(--muted)]">{desc}</span>
+    </div>
+  );
+}
+
 const tooltipStyle = {
   contentStyle: {
     border: "1px solid rgba(15,23,42,0.08)",
@@ -92,7 +108,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [trail, setTrail] = useState<DrillStep[]>([]);
-  const [view, setView] = useState<DashboardView>(DEFAULT_VIEW);
   const [excludeTopLoc, setExcludeTopLoc] = useState(false);
   const [hoverShare, setHoverShare] = useState<string | null>(null);
   const [excludeOutliers, setExcludeOutliers] = useState(false);
@@ -105,7 +120,7 @@ export default function Dashboard() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/data");
+        const res = await fetch("/api/data", { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? "Failed to load data");
         if (!cancelled) setData(json);
@@ -163,28 +178,19 @@ export default function Dashboard() {
   );
 
   const syncUrl = useCallback(
-    (nextFilters: Filters, nextView: DashboardView) => {
-      router.replace(`${pathname}${buildDashboardUrl(nextFilters, nextView)}`, { scroll: false });
+    (nextFilters: Filters) => {
+      router.replace(`${pathname}${buildDashboardUrl(nextFilters)}`, { scroll: false });
     },
     [pathname, router],
   );
 
   const applyDashboardState = useCallback(
-    (nextFilters: Filters, nextTrail: DrillStep[], nextView: DashboardView = view) => {
+    (nextFilters: Filters, nextTrail: DrillStep[]) => {
       setFilters(nextFilters);
       setTrail(nextTrail);
-      setView(nextView);
-      syncUrl(nextFilters, nextView);
+      syncUrl(nextFilters);
     },
-    [syncUrl, view],
-  );
-
-  const changeView = useCallback(
-    (nextView: DashboardView) => {
-      setView(nextView);
-      syncUrl(filters, nextView);
-    },
-    [filters, syncUrl],
+    [syncUrl],
   );
 
   useEffect(() => {
@@ -192,7 +198,6 @@ export default function Dashboard() {
     const parsed = parseDashboardUrl(searchParams);
     setFilters(parsed.filters);
     setTrail(trailFromFilters(parsed.filters, projectShort));
-    setView(parsed.view);
     urlHydrated.current = true;
   }, [data, searchParams, projectShort]);
 
@@ -306,8 +311,7 @@ export default function Dashboard() {
   function drillTo(step: DrillStep, opts?: { scroll?: boolean }) {
     const nextTrail = sortTrail([...trail.filter((s) => s.key !== step.key), step]);
     const nextFilters = { ...filters, [step.key]: step.value };
-    const nextView = opts?.scroll !== false ? "details" : view;
-    applyDashboardState(nextFilters, nextTrail, nextView);
+    applyDashboardState(nextFilters, nextTrail);
     if (opts?.scroll !== false) {
       queueMicrotask(scrollToTable);
     }
@@ -325,8 +329,7 @@ export default function Dashboard() {
       location: "All",
     };
     for (const s of nextTrail) nextFilters[s.key] = s.value;
-    const nextView = opts?.scroll !== false ? "details" : view;
-    applyDashboardState(nextFilters, nextTrail, nextView);
+    applyDashboardState(nextFilters, nextTrail);
     if (opts?.scroll !== false) {
       queueMicrotask(scrollToTable);
     }
@@ -334,7 +337,7 @@ export default function Dashboard() {
 
   function goBreadcrumb(index: number) {
     if (index < 0) {
-      applyDashboardState(DEFAULT_FILTERS, [], view);
+      applyDashboardState(DEFAULT_FILTERS, []);
       return;
     }
     const nextTrail = trail.slice(0, index + 1);
@@ -345,12 +348,12 @@ export default function Dashboard() {
       location: "All",
     };
     for (const s of nextTrail) nextFilters[s.key] = s.value;
-    applyDashboardState(nextFilters, nextTrail, view);
+    applyDashboardState(nextFilters, nextTrail);
   }
 
   function resetFilters() {
     setExcludeTopLoc(false);
-    applyDashboardState(DEFAULT_FILTERS, [], DEFAULT_VIEW);
+    applyDashboardState(DEFAULT_FILTERS, []);
   }
 
   function scrollToTable() {
@@ -399,10 +402,7 @@ export default function Dashboard() {
       <header className="panel rise-in mb-5 overflow-hidden p-7 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] font-bold uppercase tracking-[0.22em] text-[var(--accent-deep)]">
-              Live Google Sheets
-            </p>
-            <h1 className="font-display mt-2 text-3xl font-semibold tracking-tight text-[var(--ink)] md:text-4xl">
+            <h1 className="font-display text-3xl font-semibold tracking-tight text-[var(--ink)] md:text-4xl">
               Construction Materials
             </h1>
             <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[var(--muted)]">
@@ -477,7 +477,7 @@ export default function Dashboard() {
           ]}
           onChange={(v) => {
             const nextFilters = { ...filters, period: v as Period };
-            applyDashboardState(nextFilters, trail, view);
+            applyDashboardState(nextFilters, trail);
           }}
         />
         <FilterSelect
@@ -490,7 +490,7 @@ export default function Dashboard() {
           onChange={(v) => {
             if (v === "All") {
               const nextTrail = trail.filter((s) => s.key !== "project");
-              applyDashboardState({ ...filters, project: "All" }, nextTrail, view);
+              applyDashboardState({ ...filters, project: "All" }, nextTrail);
             } else {
               drillTo({ key: "project", value: v, label: projectShort(v) }, { scroll: false });
             }
@@ -506,7 +506,7 @@ export default function Dashboard() {
           onChange={(v) => {
             if (v === "All") {
               const nextTrail = trail.filter((s) => s.key !== "material");
-              applyDashboardState({ ...filters, material: "All" }, nextTrail, view);
+              applyDashboardState({ ...filters, material: "All" }, nextTrail);
             } else {
               drillTo({ key: "material", value: v, label: v }, { scroll: false });
             }
@@ -522,7 +522,7 @@ export default function Dashboard() {
           onChange={(v) => {
             if (v === "All") {
               const nextTrail = trail.filter((s) => s.key !== "location");
-              applyDashboardState({ ...filters, location: "All" }, nextTrail, view);
+              applyDashboardState({ ...filters, location: "All" }, nextTrail);
             } else {
               drillTo({ key: "location", value: v, label: v }, { scroll: false });
             }
@@ -592,10 +592,7 @@ export default function Dashboard() {
         )}
         <button
           type="button"
-          onClick={() => {
-            changeView("details");
-            queueMicrotask(scrollToTable);
-          }}
+          onClick={scrollToTable}
           className="rounded-full border border-[var(--line)] px-3 py-1 text-xs font-semibold text-[var(--ink)] hover:bg-[#f8fafc]"
         >
           View rows ↓
@@ -695,15 +692,27 @@ export default function Dashboard() {
         />
       </div>
 
-      <ViewTabs view={view} onChange={changeView} />
+      <SectionDivider
+        index={1}
+        title="Map command center"
+        desc="Click a province — every chart and table below follows"
+      />
+      <div id="section-map" className="mb-5">
+        <ProvinceMap
+          locationAgg={byLocationAll}
+          periodLabel={pLabel}
+          selectedLocation={filters.location}
+          materialFilter={filters.material}
+          onDrill={(l) => drillTo({ key: "location", value: l, label: l }, { scroll: false })}
+        />
+      </div>
 
-      {view === "overview" && (
-        <div
-          id="panel-overview"
-          role="tabpanel"
-          aria-labelledby="tab-overview"
-          className="mb-5 space-y-5"
-        >
+      <SectionDivider
+        index={2}
+        title="Overview"
+        desc="The big picture — where the shortages are"
+      />
+      <div id="section-overview" className="mb-5 space-y-5">
       <div className="panel rise-in p-5" style={{ animationDelay: "80ms" }}>
           <SectionHead
             title={
@@ -1025,14 +1034,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <ProvinceMap
-          locationAgg={byLocationAll}
-          periodLabel={pLabel}
-          selectedLocation={filters.location}
-          materialFilter={filters.material}
-          onDrill={(l) => drillTo({ key: "location", value: l, label: l })}
-        />
-
         <div className="panel p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <SectionHead
@@ -1121,16 +1122,14 @@ export default function Dashboard() {
             )}
           </ul>
         </div>
-        </div>
-      )}
+      </div>
 
-      {view === "analysis" && (
-        <div
-          id="panel-analysis"
-          role="tabpanel"
-          aria-labelledby="tab-analysis"
-          className="mb-5 space-y-5"
-        >
+      <SectionDivider
+        index={3}
+        title="Charts & comparisons"
+        desc="Materials, periods and priorities side by side"
+      />
+      <div id="section-analysis" className="mb-5 space-y-5">
       <div className="grid gap-5 lg:grid-cols-2">
         <TransferPanel
           rows={scoped}
@@ -1424,16 +1423,14 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-        </div>
-      )}
+      </div>
 
-      {view === "details" && (
-        <div
-          id="panel-details"
-          role="tabpanel"
-          aria-labelledby="tab-details"
-          className="mb-5 space-y-5"
-        >
+      <SectionDivider
+        index={4}
+        title="Detail rows & data checks"
+        desc="Every record, plus proof the numbers match the sheet"
+      />
+      <div id="section-details" className="mb-5 space-y-5">
         <DataQualityPanel
           integrity={data.integrity}
           recordsInScope={scoped.length}
@@ -1545,14 +1542,13 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
-        </div>
-      )}
+      </div>
 
       <footer className="panel mb-2 flex flex-wrap items-center justify-between gap-3 px-5 py-4 text-xs text-[var(--muted)]">
         <p>
-          Source: Google Sheet DashData + Appendix2 (Ministry section) · {data.meta.recordCount}{" "}
+          Source: Google Sheet {data.source.recordsFrom} (all sections) · {data.meta.recordCount}{" "}
           records · {data.integrity.zeroRowsDropped} zero rows dropped ·{" "}
-          {data.integrity.duplicatesMerged} duplicates merged · server cache 5 min
+          {data.integrity.duplicatesMerged} duplicates merged · fetched live on every load
         </p>
         <div className="flex flex-wrap gap-2">
           <a

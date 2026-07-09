@@ -15,6 +15,10 @@ const RECORDS_SHEET = process.env.SHEET_TAB_RECORDS ?? "DashData";
 const SUMMARY_SHEET = process.env.SHEET_TAB_SUMMARY ?? "Dashboard";
 const APPENDIX_SHEET = process.env.SHEET_TAB_APPENDIX ?? "Appendix2";
 
+/** Category label for localities that appear only in the appendix total section */
+const TOTAL_ONLY_CATEGORY =
+  process.env.SHEET_TOTAL_ONLY_LABEL ?? "Totals-only provinces";
+
 /** Used only if the unit cannot be found anywhere in the sheet itself */
 const FALLBACK_UNIT = "1,000 m³";
 /** Used only if period tokens cannot be read from the records header row */
@@ -74,7 +78,8 @@ function calcCoverage(demand: number, supply: number): number | null {
 
 async function fetchGviz(sheetName: string): Promise<GvizResponse> {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
-  const res = await fetch(url, { next: { revalidate: 300 } });
+  // Live fetch on every request so sheet edits are reflected immediately
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch sheet "${sheetName}": ${res.status}`);
   const text = await res.text();
   const json = text.replace(/^[^(]*\(/, "").replace(/\);?\s*$/, "");
@@ -220,16 +225,15 @@ interface SupplementalSection {
 }
 
 /**
- * Find appendix sections that are NOT represented in the records sheet.
- * Structural signature (no text anchors): a row with an empty marker column,
- * a long text title matching no known category, no numeric cells, immediately
- * followed by roman-numeral material blocks. Each such section is ingested:
- * roman-marker rows set the material, other named rows are detail records.
+ * Row indices of supplemental-section headers. Structural signature (no text
+ * anchors): a row with an empty marker column, a long text title matching no
+ * known category, no numeric cells, immediately followed by roman-numeral
+ * material blocks.
  */
-function parseSupplementalSections(
+function findSupplementalHeaderIdxs(
   appendix: GvizResponse,
   knownCategories: string[],
-): SupplementalSection[] {
+): number[] {
   const rows = appendix.table.rows;
   const lowerCats = knownCategories.map((c) => c.toLowerCase());
 
@@ -248,6 +252,20 @@ function parseSupplementalSections(
       break;
     }
   });
+  return headerIdxs;
+}
+
+/**
+ * Find appendix sections that are NOT represented in the records sheet.
+ * Each such section is ingested: roman-marker rows set the material, other
+ * named rows are detail records.
+ */
+function parseSupplementalSections(
+  appendix: GvizResponse,
+  knownCategories: string[],
+): SupplementalSection[] {
+  const rows = appendix.table.rows;
+  const headerIdxs = findSupplementalHeaderIdxs(appendix, knownCategories);
 
   return headerIdxs.map((start, h) => {
     const end = headerIdxs[h + 1] ?? rows.length;
@@ -282,6 +300,111 @@ function parseSupplementalSections(
     }
 
     return { title, shortName, rows: out };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Appendix main-section parsing — the appendix detail sections are the primary
+// record source, so edits made there flow straight into the dashboard even if
+// the flat records sheet is a stale copy.
+// ---------------------------------------------------------------------------
+
+interface AppendixSection {
+  marker: string;
+  title: string;
+  category: string;
+  /** Long-titled sections carry detail rows; short-titled ones are aggregates */
+  isDetail: boolean;
+  /** One entry per material header row (the sheet's own per-material totals) */
+  materialTotals: RawRow[];
+  rows: RawRow[];
+}
+
+/** Display category for a section: the records-sheet category its title names */
+function categoryForSection(title: string, baseCategories: string[]): string {
+  const lower = title.toLowerCase();
+  return (
+    baseCategories.find((c) => lower.includes(c.toLowerCase())) ??
+    shortSectionName(title)
+  );
+}
+
+/**
+ * Parse the appendix's main region (everything before the first supplemental
+ * header) into sections. Structure, not content: roman-marker rows open a
+ * section; within it, integer markers arriving as a 1,2,3… sequence open a
+ * material block (the row itself holds the sheet's material totals); every
+ * other named row is a locality detail record.
+ */
+function parseAppendixMainSections(
+  appendix: GvizResponse,
+  baseCategories: string[],
+): AppendixSection[] {
+  const rows = appendix.table.rows;
+  const limit =
+    findSupplementalHeaderIdxs(appendix, baseCategories)[0] ?? rows.length;
+
+  const bounds: { start: number; marker: string; title: string }[] = [];
+  for (let i = 0; i < limit; i++) {
+    const marker = str(rows[i].c[0]);
+    const title = str(rows[i].c[1]);
+    if (ROMAN_RE.test(marker) && title) bounds.push({ start: i, marker, title });
+  }
+
+  return bounds.map((b, k) => {
+    const end = bounds[k + 1]?.start ?? limit;
+    const block = rows.slice(b.start + 1, end);
+
+    // Value columns = columns where this section actually holds numbers
+    const numericCols = [
+      ...new Set(
+        block.flatMap((r) =>
+          r.c.map((cell, ci) => (ci >= 2 && isNumericCell(cell) ? ci : -1)).filter((ci) => ci >= 0),
+        ),
+      ),
+    ].sort((a, z) => a - z);
+
+    const category = categoryForSection(b.title, baseCategories);
+    const section: AppendixSection = {
+      marker: b.marker,
+      title: b.title,
+      category,
+      isDetail: b.title.length >= SECTION_TITLE_MIN_LENGTH,
+      materialTotals: [],
+      rows: [],
+    };
+
+    let material = "";
+    let nextSeq = 1;
+    for (const row of block) {
+      const marker = str(row.c[0]);
+      const name = str(row.c[1]);
+      if (!name) continue;
+      const v = numericCols.map((ci) => num(row.c[ci]));
+      const [d1 = 0, s1 = 0, b1 = s1 - d1, d2 = 0, s2 = 0, b2 = s2 - d2] = v;
+      const values = { d1, s1, b1, d2, s2, b2 };
+      if (marker === String(nextSeq)) {
+        material = name;
+        nextSeq += 1;
+        section.materialTotals.push({
+          category,
+          project: b.title,
+          material: name,
+          location: "",
+          ...values,
+        });
+        continue;
+      }
+      if (!material) continue;
+      section.rows.push({
+        category,
+        project: b.title,
+        material,
+        location: name,
+        ...values,
+      });
+    }
+    return section;
   });
 }
 
@@ -418,18 +541,17 @@ function parseSummaryMaterials(
 }
 
 /**
- * Reconcile computed sums against the sheet's own summary table. The summary
- * covers only records-sheet sections, so supplemental categories are excluded
- * from the comparison side.
+ * Reconcile computed sums against a sheet-provided totals table, excluding
+ * categories the sheet's own totals do not cover.
  */
 function buildMaterialChecks(
   records: MaterialRecord[],
   sheetMaterials: MaterialSummary[],
-  supplementalCategories: Set<string>,
+  excludedCategories: Set<string>,
 ): MaterialCheck[] {
   return sheetMaterials.map((m) => {
     const computed = records
-      .filter((r) => !supplementalCategories.has(r.category) && r.material === m.material)
+      .filter((r) => !excludedCategories.has(r.category) && r.material === m.material)
       .reduce((a, r) => a + r.demand2026, 0);
     const delta = computed - m.demand2026;
     return {
@@ -449,15 +571,40 @@ function buildIntegrity(
   rawAll: RawRow[],
   sections: SupplementalSection[],
   appendixLoaded: boolean,
+  totalSection: AppendixSection | null,
+  totalOnlyProvinces: string[],
 ): DataIntegrity {
   const suppCats = new Set(sections.map((s) => s.shortName));
   const suppRecords = records.filter((r) => suppCats.has(r.category));
   const sum = (fn: (r: MaterialRecord) => number) => suppRecords.reduce((a, r) => a + fn(r), 0);
+
+  // The sheet's summary and total tables cover only the main record sections
+  const excludedFromSummary = new Set([...suppCats, TOTAL_ONLY_CATEGORY]);
+
+  const totalMaterials: MaterialSummary[] = (totalSection?.materialTotals ?? []).map((m) => ({
+    material: m.material,
+    demand2026: m.d1,
+    supply2026: m.s1,
+    balance2026: m.b1,
+    demand2730: m.d2,
+    supply2730: m.s2,
+    balance2730: m.b2,
+  }));
+
   return {
-    materialChecks: buildMaterialChecks(records, sheetMaterials, suppCats),
+    materialChecks: buildMaterialChecks(records, sheetMaterials, excludedFromSummary),
     balanceMismatches: countBalanceMismatches(rawAll),
     duplicatesMerged: build.duplicatesMerged,
     zeroRowsDropped: build.zeroRowsDropped,
+    totalSection: {
+      found: totalSection !== null,
+      title: totalSection?.title ?? null,
+      // The sheet's total is defined as the sum of its detail sections, so
+      // totals-only localities (reported nowhere else) are excluded here too
+      checks: buildMaterialChecks(records, totalMaterials, excludedFromSummary),
+      provincesAdded: totalOnlyProvinces,
+      category: totalOnlyProvinces.length > 0 ? TOTAL_ONLY_CATEGORY : null,
+    },
     supplemental: {
       loaded: appendixLoaded,
       sections: sections.map((s) => s.shortName),
@@ -472,29 +619,58 @@ function buildIntegrity(
 
 export async function loadDashboardData(): Promise<DashboardPayload> {
   const [recordsSheet, summarySheet, appendixSheet] = await Promise.all([
-    fetchGviz(RECORDS_SHEET),
-    fetchGviz(SUMMARY_SHEET),
-    // Supplemental sections are additive — degrade gracefully if unavailable
+    // Each worksheet degrades gracefully; only losing every record source throws
+    fetchGviz(RECORDS_SHEET).catch(() => null),
+    fetchGviz(SUMMARY_SHEET).catch(() => null),
     fetchGviz(APPENDIX_SHEET).catch(() => null),
   ]);
+  if (!recordsSheet && !appendixSheet) {
+    throw new Error(
+      `Could not load "${APPENDIX_SHEET}" or "${RECORDS_SHEET}" from the Google Sheet`,
+    );
+  }
 
-  const cols = mapRecordColumns(recordsSheet);
-  const baseRows = parseRecordsSheet(recordsSheet, cols);
-  const baseCategories = [...new Set(baseRows.map((r) => r.category))];
+  const cols = recordsSheet ? mapRecordColumns(recordsSheet) : null;
+  const dashRows =
+    recordsSheet && cols ? parseRecordsSheet(recordsSheet, cols) : [];
+  const baseCategories = [...new Set(dashRows.map((r) => r.category))];
+
+  // Appendix detail sections are the primary record source; the flat records
+  // sheet is the fallback, so appendix edits always reach the dashboard.
+  const mainSections = appendixSheet
+    ? parseAppendixMainSections(appendixSheet, baseCategories)
+    : [];
+  const detailSections = mainSections.filter((s) => s.isDetail && s.rows.length > 0);
+  const totalSection = mainSections.find((s) => !s.isDetail) ?? null;
+  const usingAppendix = detailSections.length > 0;
+  const detailRows = usingAppendix
+    ? detailSections.flatMap((s) => s.rows)
+    : dashRows;
+
+  // Localities reported only in the appendix total section — keep their data
+  const detailLocs = new Set(detailRows.map((r) => r.location.toLowerCase()));
+  const totalOnlyRows = (totalSection?.rows ?? [])
+    .filter((r) => !detailLocs.has(r.location.toLowerCase()) && !isZero(r))
+    .map((r) => ({ ...r, category: TOTAL_ONLY_CATEGORY }));
+  const totalOnlyProvinces = [...new Set(totalOnlyRows.map((r) => r.location))];
 
   const sections = appendixSheet
     ? parseSupplementalSections(appendixSheet, baseCategories)
     : [];
-  const descriptions = appendixSheet
-    ? deriveCategoryDescriptions(appendixSheet, baseCategories)
-    : new Map<string, string>();
+  const descriptions = usingAppendix
+    ? new Map(detailSections.map((s) => [s.category, s.title]))
+    : appendixSheet
+      ? deriveCategoryDescriptions(appendixSheet, baseCategories)
+      : new Map<string, string>();
 
-  const raw = [...baseRows, ...sections.flatMap((s) => s.rows)];
+  const raw = [...detailRows, ...totalOnlyRows, ...sections.flatMap((s) => s.rows)];
   const build = buildRecords(raw, descriptions);
   const { records } = build;
 
   const knownMaterials = new Set(records.map((r) => r.material));
-  const sheetMaterials = parseSummaryMaterials(summarySheet, knownMaterials);
+  const sheetMaterials = summarySheet
+    ? parseSummaryMaterials(summarySheet, knownMaterials)
+    : [];
 
   return {
     source: {
@@ -502,16 +678,26 @@ export async function loadDashboardData(): Promise<DashboardPayload> {
       sheetUrl: `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`,
       fetchedAt: new Date().toISOString(),
       worksheets: [SUMMARY_SHEET, RECORDS_SHEET, APPENDIX_SHEET],
+      recordsFrom: usingAppendix ? APPENDIX_SHEET : RECORDS_SHEET,
     },
     kpis: kpisFromRecords(records),
     records,
-    integrity: buildIntegrity(records, sheetMaterials, build, raw, sections, appendixSheet !== null),
+    integrity: buildIntegrity(
+      records,
+      sheetMaterials,
+      build,
+      raw,
+      sections,
+      appendixSheet !== null,
+      totalSection,
+      totalOnlyProvinces,
+    ),
     meta: {
       recordCount: records.length,
       materials: [...new Set(records.map((r) => r.material))].sort(),
       locations: [...new Set(records.map((r) => r.location))].sort(),
       projects: [...new Set(records.map((r) => r.project))].sort(),
-      periods: cols.periods,
+      periods: cols?.periods ?? FALLBACK_PERIODS,
       unit: deriveUnit([appendixSheet, summarySheet, recordsSheet]),
     },
   };

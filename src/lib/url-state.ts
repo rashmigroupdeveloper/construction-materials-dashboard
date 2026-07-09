@@ -1,17 +1,9 @@
 import type { Filters, Period } from "./types";
 
-export type DashboardView = "overview" | "analysis" | "details";
-
-const VALID_VIEWS: DashboardView[] = ["overview", "analysis", "details"];
 const VALID_PERIODS: Period[] = ["2026", "2730"];
 
-export const DEFAULT_VIEW: DashboardView = "overview";
-
-export function parseDashboardUrl(
-  searchParams: URLSearchParams,
-): { filters: Filters; view: DashboardView } {
+export function parseDashboardUrl(searchParams: URLSearchParams): { filters: Filters } {
   const period = searchParams.get("period");
-  const view = searchParams.get("view");
 
   return {
     filters: {
@@ -20,18 +12,16 @@ export function parseDashboardUrl(
       material: searchParams.get("material") ?? "All",
       location: searchParams.get("location") ?? "All",
     },
-    view: VALID_VIEWS.includes(view as DashboardView) ? (view as DashboardView) : DEFAULT_VIEW,
   };
 }
 
-export function buildDashboardUrl(filters: Filters, view: DashboardView): string {
+export function buildDashboardUrl(filters: Filters): string {
   const params = new URLSearchParams();
 
   if (filters.period !== "2026") params.set("period", filters.period);
   if (filters.project !== "All") params.set("project", filters.project);
   if (filters.material !== "All") params.set("material", filters.material);
   if (filters.location !== "All") params.set("location", filters.location);
-  if (view !== DEFAULT_VIEW) params.set("view", view);
 
   const qs = params.toString();
   return qs ? `?${qs}` : "";

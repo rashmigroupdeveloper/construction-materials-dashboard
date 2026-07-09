@@ -23,7 +23,8 @@ export default function DataQualityPanel({
   basePeriodLabel,
 }: DataQualityPanelProps) {
   const allOk = integrity.materialChecks.every((c) => c.ok);
-  const { supplemental } = integrity;
+  const { supplemental, totalSection } = integrity;
+  const totalOk = totalSection.checks.every((c) => c.ok);
 
   return (
     <div className="panel rise-in p-5" style={{ animationDelay: "120ms" }}>
@@ -77,6 +78,56 @@ export default function DataQualityPanel({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {totalSection.found && totalSection.checks.length > 0 && (
+        <div className="mt-3 rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
+              Appendix “{totalSection.title}” · demand {basePeriodLabel} by material
+            </p>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                totalOk ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+              }`}
+            >
+              {totalOk ? "MATCHES TOTAL" : "SHEET TOTAL DIFFERS"}
+            </span>
+          </div>
+          <ul className="mt-2 space-y-1">
+            {totalSection.checks.map((c) => (
+              <li key={c.material} className="flex items-center justify-between text-xs">
+                <span className="text-[var(--muted)]">{shortLabel(c.material)}</span>
+                <span className="kpi-value flex items-center gap-2 tabular-nums">
+                  {fmt(c.computedDemand2026)}
+                  {c.ok ? (
+                    <span className="font-bold text-emerald-600">✓</span>
+                  ) : (
+                    <span className="font-bold text-amber-600">
+                      sheet {fmt(c.sheetDemand2026)} · Δ {fmt(c.delta)}
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {!totalOk && (
+            <p className="mt-2 text-[11px] leading-relaxed text-[var(--muted)]">
+              The appendix&apos;s own total section disagrees with the sum of its detail
+              sections. The dashboard shows sums recomputed from every detail row, so no
+              data is lost — the drift above is in the source sheet itself.
+            </p>
+          )}
+        </div>
+      )}
+
+      {totalSection.provincesAdded.length > 0 && (
+        <div className="mt-3 rounded-xl border border-sky-200/80 bg-sky-50/50 p-3 text-xs leading-relaxed text-sky-900">
+          <strong>Localities recovered from the total section:</strong>{" "}
+          {totalSection.provincesAdded.join(", ")} appear only in “{totalSection.title}”
+          and in no detail section. Their figures are included under{" "}
+          <strong>{totalSection.category}</strong> so nothing in the sheet is dropped.
         </div>
       )}
 

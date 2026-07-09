@@ -55,6 +55,17 @@ export interface DataIntegrity {
   balanceMismatches: number;
   duplicatesMerged: number;
   zeroRowsDropped: number;
+  /** Reconciliation against the appendix's own total (aggregate) section */
+  totalSection: {
+    found: boolean;
+    title: string | null;
+    /** Computed sums vs the total section's per-material rows */
+    checks: MaterialCheck[];
+    /** Localities found only in the total section, ingested as records */
+    provincesAdded: string[];
+    /** Category label those records were filed under */
+    category: string | null;
+  };
   /** Appendix sections absent from the records sheet, discovered structurally */
   supplemental: {
     loaded: boolean;
@@ -73,6 +84,8 @@ export interface DashboardPayload {
     sheetUrl: string;
     fetchedAt: string;
     worksheets: string[];
+    /** Worksheet the detail records were actually parsed from */
+    recordsFrom: string;
   };
   kpis: DashboardKpis;
   records: MaterialRecord[];

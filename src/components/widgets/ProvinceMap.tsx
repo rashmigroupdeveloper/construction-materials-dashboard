@@ -175,6 +175,38 @@ export default function ProvinceMap({
     [selectedLocation],
   );
 
+  /** Camera cage: Vietnam plus a small margin — panning past it is impossible */
+  const maxBounds = useMemo(() => {
+    if (!enriched) return undefined;
+    const [[minLon, minLat], [maxLon, maxLat]] = enriched.bounds;
+    const padLon = (maxLon - minLon) * 0.35;
+    const padLat = (maxLat - minLat) * 0.2;
+    return [
+      [minLon - padLon, minLat - padLat],
+      [maxLon + padLon, maxLat + padLat],
+    ] as [[number, number], [number, number]];
+  }, [enriched]);
+
+  /** Fit the whole country in view — used on load and by the reset button */
+  const fitVietnam = useCallback(
+    (animate = false) => {
+      const map = mapRef.current?.getMap();
+      if (!map || !enriched) return;
+      const [[minLon, minLat], [maxLon, maxLat]] = enriched.bounds;
+      map.fitBounds(
+        [
+          [minLon, minLat],
+          [maxLon, maxLat],
+        ],
+        {
+          padding: { top: 48, bottom: 48, left: 40, right: 40 },
+          duration: animate ? 600 : 0,
+        },
+      );
+    },
+    [enriched],
+  );
+
   const clearHoverState = useCallback(() => {
     const map = mapRef.current?.getMap();
     if (map && hoveredIdRef.current != null) {
@@ -237,17 +269,8 @@ export default function ProvinceMap({
   );
 
   const onMapLoad = useCallback(() => {
-    const map = mapRef.current?.getMap();
-    if (!map || !enriched) return;
-    const [[minLon, minLat], [maxLon, maxLat]] = enriched.bounds;
-    map.fitBounds(
-      [
-        [minLon, minLat],
-        [maxLon, maxLat],
-      ],
-      { padding: { top: 48, bottom: 48, left: 40, right: 40 }, duration: 0 },
-    );
-  }, [enriched]);
+    fitVietnam(false);
+  }, [fitVietnam]);
 
   const mappedCount = metrics.provinces.length;
   const withUnmet = metrics.provinces.filter((p) => p.unmet > 0).length;
@@ -303,9 +326,16 @@ export default function ProvinceMap({
     <div className="panel p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <SectionHead
-          title="Province map"
-          subtitle={`Unmet by province · ${scopeLabel} · ${mappedCount} provinces in data`}
+          title="Province map · command center"
+          subtitle={`Click a province to filter everything below · ${scopeLabel} · ${mappedCount} provinces in data`}
         />
+        <button
+          type="button"
+          onClick={() => fitVietnam(true)}
+          className="shrink-0 rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-[11px] font-bold text-[var(--ink)] transition hover:bg-[#f8fafc]"
+        >
+          ⤢ Reset view
+        </button>
         {topLocShare > 0.4 && (
           <button
             type="button"
@@ -341,6 +371,9 @@ export default function ProvinceMap({
               mapStyle="mapbox://styles/mapbox/light-v11"
               style={{ width: "100%", height: "100%", minHeight: 680 }}
               interactiveLayerIds={["provinces-fill"]}
+              maxBounds={maxBounds}
+              minZoom={4.2}
+              maxZoom={11}
               onLoad={onMapLoad}
               onMouseMove={onMapMouseMove}
               onMouseLeave={onMapMouseLeave}
@@ -480,8 +513,8 @@ export default function ProvinceMap({
               <span>{enriched ? fmt(enriched.scaleMax) : "—"}+</span>
             </div>
             <p className="mt-2 text-[11px] leading-relaxed text-[var(--muted)]">
-              {withUnmet} provinces with shortage · scroll to zoom · drag to pan · labels appear as
-              you zoom in
+              {withUnmet} provinces with shortage · scroll to zoom · drag to pan — the map is
+              locked to Vietnam, so you can’t lose it · “Reset view” brings the whole country back
             </p>
           </div>
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadDashboardData } from "@/lib/sheets";
 
-export const revalidate = 300;
+// No caching: every request re-reads the Google Sheet so edits show immediately
 
 export async function GET() {
   try {
