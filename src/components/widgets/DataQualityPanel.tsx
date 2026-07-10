@@ -37,12 +37,12 @@ export default function DataQualityPanel({
         <QualityChip label="Records in scope" value={String(recordsInScope)} good />
         <QualityChip label="Surplus rows" value={String(surplusRowsInScope)} good />
         <QualityChip
-          label="Balance errors"
+          label="Balance errors · all"
           value={String(integrity.balanceMismatches)}
           good={integrity.balanceMismatches === 0}
         />
         <QualityChip
-          label="Dupes merged"
+          label="Dupes merged · all"
           value={String(integrity.duplicatesMerged)}
           good
           note={`${integrity.zeroRowsDropped} zero rows dropped`}
@@ -53,7 +53,7 @@ export default function DataQualityPanel({
         <div className="mt-3 rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
           <div className="flex items-center justify-between">
             <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
-              Sheet reconciliation · demand {basePeriodLabel} by material
+              Sheet reconciliation · all metrics by material
             </p>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
@@ -68,11 +68,11 @@ export default function DataQualityPanel({
               <li key={c.material} className="flex items-center justify-between text-xs">
                 <span className="text-[var(--muted)]">{shortLabel(c.material)}</span>
                 <span className="kpi-value flex items-center gap-2 tabular-nums">
-                  {fmt(c.computedDemand2026)}
+                  {metricSummary(c)}
                   {c.ok ? (
                     <span className="font-bold text-emerald-600">✓</span>
                   ) : (
-                    <span className="font-bold text-rose-600">Δ {fmt(c.delta)}</span>
+                    <span className="font-bold text-rose-600">{firstMismatch(c)}</span>
                   )}
                 </span>
               </li>
@@ -85,7 +85,7 @@ export default function DataQualityPanel({
         <div className="mt-3 rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
           <div className="flex items-center justify-between">
             <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
-              Appendix “{totalSection.title}” · demand {basePeriodLabel} by material
+              Appendix “{totalSection.title}” · all metrics by material
             </p>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
@@ -100,13 +100,11 @@ export default function DataQualityPanel({
               <li key={c.material} className="flex items-center justify-between text-xs">
                 <span className="text-[var(--muted)]">{shortLabel(c.material)}</span>
                 <span className="kpi-value flex items-center gap-2 tabular-nums">
-                  {fmt(c.computedDemand2026)}
+                  {metricSummary(c)}
                   {c.ok ? (
                     <span className="font-bold text-emerald-600">✓</span>
                   ) : (
-                    <span className="font-bold text-amber-600">
-                      sheet {fmt(c.sheetDemand2026)} · Δ {fmt(c.delta)}
-                    </span>
+                    <span className="font-bold text-amber-600">{firstMismatch(c)}</span>
                   )}
                 </span>
               </li>
@@ -161,6 +159,17 @@ export default function DataQualityPanel({
       </div>
     </div>
   );
+}
+
+function metricSummary(c: DataIntegrity["materialChecks"][number]) {
+  const okCount = c.checks.filter((check) => check.ok).length;
+  return `${okCount}/${c.checks.length}`;
+}
+
+function firstMismatch(c: DataIntegrity["materialChecks"][number]) {
+  const mismatch = c.checks.find((check) => !check.ok);
+  if (!mismatch) return "";
+  return `${mismatch.label}: Δ ${fmt(mismatch.delta)}`;
 }
 
 function QualityChip({

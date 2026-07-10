@@ -201,6 +201,31 @@ export default function Dashboard() {
     urlHydrated.current = true;
   }, [data, searchParams, projectShort]);
 
+  /**
+   * Demand split: sheet-summary sections vs the extra Appendix 2 blocks the
+   * sheet's own summary tab omits (Ministry section, totals-only provinces).
+   * Powers the "why is this larger than the sheet" note under the KPIs.
+   */
+  const kpiBridge = useMemo(() => {
+    if (!data) return null;
+    const extraCats = new Set([
+      ...data.integrity.supplemental.sections,
+      ...(data.integrity.totalSection.category ? [data.integrity.totalSection.category] : []),
+    ]);
+    const dField = filters.period === "2026" ? ("demand2026" as const) : ("demand2730" as const);
+    let main = 0;
+    const byCat = new Map<string, number>();
+    for (const r of data.records) {
+      if (extraCats.has(r.category)) {
+        byCat.set(r.category, (byCat.get(r.category) ?? 0) + r[dField]);
+      } else {
+        main += r[dField];
+      }
+    }
+    const extras = [...byCat.entries()].filter(([, v]) => v > 0);
+    return { main, extras, total: main + extras.reduce((a, [, v]) => a + v, 0) };
+  }, [data, filters.period]);
+
   const byMaterial = useMemo(
     () => aggregateBy(scoped, "material", filters.period).sort((a, b) => b.demand - a.demand),
     [scoped, filters.period],
@@ -691,6 +716,35 @@ export default function Dashboard() {
           delay={4}
         />
       </div>
+
+      {/* Bridge to the sheet's own summary tab, so the larger totals here never
+          read as a data mismatch — shown only at full (unfiltered) scope */}
+      {kpiBridge && kpiBridge.extras.length > 0 &&
+        filters.project === "All" &&
+        filters.material === "All" &&
+        filters.location === "All" && (
+          <div className="panel mb-5 border-l-4 border-l-sky-500 px-4 py-3 text-xs leading-relaxed text-[var(--muted)]">
+            <strong className="text-[var(--ink)]">
+              Why total demand here is larger than the sheet’s Dashboard tab:
+            </strong>{" "}
+            that tab counts only the three main sections —{" "}
+            <span className="kpi-value font-semibold text-[var(--ink)]">
+              {fmt(kpiBridge.main)}
+            </span>{" "}
+            demand in {pLabel}. This dashboard also includes{" "}
+            {kpiBridge.extras.map(([cat, v], i) => (
+              <span key={cat}>
+                {i > 0 && " and "}
+                <strong className="text-[var(--ink)]">{cat}</strong> (+{fmt(v)})
+              </span>
+            ))}
+            , which exist in Appendix 2 but are missing from the sheet’s own summary. Together:{" "}
+            <span className="kpi-value font-semibold text-[var(--ink)]">
+              {fmt(kpiBridge.total)}
+            </span>
+            . Nothing is double-counted — use the Project filter to view any group alone.
+          </div>
+        )}
 
       <SectionDivider
         index={1}

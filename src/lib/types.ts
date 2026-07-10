@@ -40,11 +40,20 @@ export interface DashboardKpis {
   coverage2730: number;
 }
 
+export type MaterialSummaryMetric = Exclude<keyof MaterialSummary, "material">;
+
+export interface ReconciliationFieldCheck {
+  field: MaterialSummaryMetric;
+  label: string;
+  sheet: number;
+  computed: number;
+  delta: number;
+  ok: boolean;
+}
+
 export interface MaterialCheck {
   material: string;
-  sheetDemand2026: number;
-  computedDemand2026: number;
-  delta: number;
+  checks: ReconciliationFieldCheck[];
   ok: boolean;
 }
 

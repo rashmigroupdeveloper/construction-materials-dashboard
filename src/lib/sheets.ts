@@ -5,6 +5,7 @@ import type {
   MaterialCheck,
   MaterialRecord,
   MaterialSummary,
+  MaterialSummaryMetric,
 } from "./types";
 
 const SHEET_ID =
@@ -18,6 +19,7 @@ const APPENDIX_SHEET = process.env.SHEET_TAB_APPENDIX ?? "Appendix2";
 /** Category label for localities that appear only in the appendix total section */
 const TOTAL_ONLY_CATEGORY =
   process.env.SHEET_TOTAL_ONLY_LABEL ?? "Totals-only provinces";
+const TOTAL_ONLY_PROJECT = "Recovered from Appendix total section";
 
 /** Used only if the unit cannot be found anywhere in the sheet itself */
 const FALLBACK_UNIT = "1,000 m³";
@@ -549,17 +551,37 @@ function buildMaterialChecks(
   sheetMaterials: MaterialSummary[],
   excludedCategories: Set<string>,
 ): MaterialCheck[] {
+  const fields: { field: MaterialSummaryMetric; label: string }[] = [
+    { field: "demand2026", label: "Demand 2026" },
+    { field: "supply2026", label: "Supply 2026" },
+    { field: "balance2026", label: "Balance 2026" },
+    { field: "demand2730", label: "Demand 2027-30" },
+    { field: "supply2730", label: "Supply 2027-30" },
+    { field: "balance2730", label: "Balance 2027-30" },
+  ];
+
   return sheetMaterials.map((m) => {
-    const computed = records
-      .filter((r) => !excludedCategories.has(r.category) && r.material === m.material)
-      .reduce((a, r) => a + r.demand2026, 0);
-    const delta = computed - m.demand2026;
+    const rows = records.filter(
+      (r) => !excludedCategories.has(r.category) && r.material === m.material,
+    );
+    const checks = fields.map(({ field, label }) => {
+      const computed = rows.reduce((a, r) => a + r[field], 0);
+      const sheet = m[field];
+      const delta = computed - sheet;
+      return {
+        field,
+        label,
+        sheet,
+        computed,
+        delta,
+        ok: Math.abs(delta) < 1,
+      };
+    });
+
     return {
       material: m.material,
-      sheetDemand2026: m.demand2026,
-      computedDemand2026: computed,
-      delta,
-      ok: Math.abs(delta) < 1,
+      checks,
+      ok: checks.every((c) => c.ok),
     };
   });
 }
@@ -651,7 +673,7 @@ export async function loadDashboardData(): Promise<DashboardPayload> {
   const detailLocs = new Set(detailRows.map((r) => r.location.toLowerCase()));
   const totalOnlyRows = (totalSection?.rows ?? [])
     .filter((r) => !detailLocs.has(r.location.toLowerCase()) && !isZero(r))
-    .map((r) => ({ ...r, category: TOTAL_ONLY_CATEGORY }));
+    .map((r) => ({ ...r, category: TOTAL_ONLY_CATEGORY, project: TOTAL_ONLY_PROJECT }));
   const totalOnlyProvinces = [...new Set(totalOnlyRows.map((r) => r.location))];
 
   const sections = appendixSheet

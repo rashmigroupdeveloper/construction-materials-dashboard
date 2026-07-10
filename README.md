@@ -11,7 +11,9 @@ Live dashboard that reads from [Google Sheets](https://docs.google.com/spreadshe
 | Appendix2     | Raw source (linked in sheet)                 |
 | Drilldown     | Pivot-style drill hierarchy                  |
 
-The app fetches **DashData** for charts/filters and **Dashboard** for headline KPIs.
+The app uses **Appendix2** as the primary chart/filter/KPI source. **DashData** is a
+fallback if Appendix2 cannot be parsed, and **Dashboard** is used for reconciliation
+against the sheet's published summary totals.
 
 ## Requirements
 
@@ -40,7 +42,8 @@ Get a free Mapbox token at [account.mapbox.com/access-tokens](https://account.ma
 
 ## API
 
-`GET /api/data` — returns parsed dashboard payload (cached 5 minutes on server).
+`GET /api/data` — returns the parsed dashboard payload. The route re-reads the
+Google Sheet on every request.
 
 ## Features
 
