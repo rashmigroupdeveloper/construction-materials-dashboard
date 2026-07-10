@@ -431,7 +431,7 @@ export default function Dashboard() {
               Construction Materials
             </h1>
             <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[var(--muted)]">
-              Demand–supply intelligence loaded live from Google Sheets. Unit:{" "}
+              Demand–supply intelligence. Unit:{" "}
               <strong className="text-[var(--ink)]">{unit}</strong>.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
