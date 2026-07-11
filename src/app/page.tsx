@@ -3,7 +3,7 @@ import Dashboard from "@/components/Dashboard";
 
 function DashboardFallback() {
   return (
-    <div className="flex min-h-screen items-center justify-center text-[var(--muted)]">
+    <div className="flex min-h-screen items-center justify-center text-(--muted)">
       Loading dashboard…
     </div>
   );

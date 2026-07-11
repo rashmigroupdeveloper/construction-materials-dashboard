@@ -12,10 +12,8 @@ export function SheetIcon({ className = "h-4 w-4" }: { className?: string }) {
 export function SectionHead({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div>
-      <h2 className="font-display text-lg font-semibold tracking-tight text-[var(--ink)]">
-        {title}
-      </h2>
-      <p className="mt-0.5 text-[12px] text-[var(--muted)]">{subtitle}</p>
+      <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
+      <p className="mt-0.5 text-xs text-(--muted)">{subtitle}</p>
     </div>
   );
 }
@@ -26,7 +24,7 @@ export function ChartLegend({ items }: { items: { label: string; color: string }
       {items.map((it) => (
         <span
           key={it.label}
-          className="inline-flex items-center gap-1.5 text-[11px] text-[var(--muted)]"
+          className="inline-flex items-center gap-1.5 text-[11px] text-(--muted)"
         >
           <span className="h-2 w-2 rounded-sm" style={{ background: it.color }} />
           {it.label}
@@ -36,42 +34,31 @@ export function ChartLegend({ items }: { items: { label: string; color: string }
   );
 }
 
-export function KpiCard({
-  label,
-  value,
-  sub,
-  hot,
-  delay = 0,
+/** Dense toolbar metrics — not hero KPI cards */
+export function MetricStrip({
+  items,
 }: {
-  label: string;
-  value: string;
-  sub: string;
-  hot?: boolean;
-  delay?: number;
+  items: { label: string; value: string; sub: string; hot?: boolean }[];
 }) {
   return (
     <div
-      className="panel rise-in relative overflow-hidden p-4"
-      style={{ animationDelay: `${delay * 40}ms` }}
+      className="panel mb-5 grid grid-cols-2 divide-y divide-(--line) sm:grid-cols-3 sm:divide-y-0 md:grid-cols-5 md:divide-x"
+      role="group"
+      aria-label="Key metrics"
     >
-      <div
-        className={`absolute inset-x-0 top-0 h-[3px] ${
-          hot
-            ? "bg-gradient-to-r from-rose-500 to-rose-400"
-            : "bg-gradient-to-r from-sky-500 to-teal-600"
-        }`}
-      />
-      <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--muted)]">
-        {label}
-      </p>
-      <p
-        className={`kpi-value font-display mt-2 text-2xl font-semibold tracking-tight ${
-          hot ? "text-[var(--bad)]" : "text-[var(--ink)]"
-        }`}
-      >
-        {value}
-      </p>
-      <p className="mt-1 text-[11px] text-[var(--muted)]">{sub}</p>
+      {items.map((item) => (
+        <div key={item.label} className="px-4 py-3">
+          <p className="text-xs font-semibold text-(--muted)">{item.label}</p>
+          <p
+            className={`kpi-value mt-1 text-xl font-semibold tracking-tight ${
+              item.hot ? "text-(--bad)" : "text-foreground"
+            }`}
+          >
+            {item.value}
+          </p>
+          <p className="mt-0.5 text-[11px] text-(--muted)">{item.sub}</p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -89,13 +76,11 @@ export function FilterSelect({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
-        {label}
-      </span>
+      <span className="text-xs font-semibold text-(--muted)">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-xl border border-[var(--line)] bg-white px-3 py-2.5 text-sm outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-500/15"
+        className="ui-transition rounded-xl border border-(--line) bg-white px-3 py-2.5 text-sm outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-500/15"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -104,5 +89,46 @@ export function FilterSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+export function ModeTabs({
+  value,
+  onChange,
+}: {
+  value: "triage" | "deep";
+  onChange: (v: "triage" | "deep") => void;
+}) {
+  const tabs: { id: "triage" | "deep"; label: string }[] = [
+    { id: "triage", label: "Triage" },
+    { id: "deep", label: "Deep dive" },
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Dashboard mode"
+      className="inline-flex rounded-xl border border-(--line) bg-(--surface-muted) p-1"
+    >
+      {tabs.map((tab) => {
+        const selected = value === tab.id;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            id={`mode-tab-${tab.id}`}
+            onClick={() => onChange(tab.id)}
+            className={`pressable rounded-lg px-3.5 py-1.5 text-sm font-semibold ${
+              selected
+                ? "bg-(--accent-deep) text-white shadow-sm"
+                : "text-(--muted) hover:text-foreground"
+            }`}
+          >
+            {tab.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }

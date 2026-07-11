@@ -193,6 +193,9 @@ export default function ProvinceMap({
       const map = mapRef.current?.getMap();
       if (!map || !enriched) return;
       const [[minLon, minLat], [maxLon, maxLat]] = enriched.bounds;
+      const reduce =
+        typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       map.fitBounds(
         [
           [minLon, minLat],
@@ -200,7 +203,7 @@ export default function ProvinceMap({
         ],
         {
           padding: { top: 48, bottom: 48, left: 40, right: 40 },
-          duration: animate ? 600 : 0,
+          duration: animate && !reduce ? 200 : 0,
         },
       );
     },
@@ -311,7 +314,7 @@ export default function ProvinceMap({
               href="https://account.mapbox.com/access-tokens/"
               target="_blank"
               rel="noopener noreferrer"
-              className="font-semibold text-sky-700 underline"
+              className="font-semibold text-sky-700 underline link-pressable"
             >
               mapbox.com
             </a>
@@ -326,21 +329,21 @@ export default function ProvinceMap({
     <div className="panel p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <SectionHead
-          title="Province map · command center"
-          subtitle={`Click a province to filter everything below · ${scopeLabel} · ${mappedCount} provinces in data`}
+          title="Province map"
+          subtitle={`Click a province to filter everything · ${scopeLabel} · ${mappedCount} provinces in data`}
         />
         <button
           type="button"
           onClick={() => fitVietnam(true)}
-          className="shrink-0 rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-[11px] font-bold text-[var(--ink)] transition hover:bg-[#f8fafc]"
+          className="shrink-0 rounded-lg border border-[var(--line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--ink)] pressable hover:bg-[var(--surface-muted)]"
         >
-          ⤢ Reset view
+          Reset view
         </button>
         {topLocShare > 0.4 && (
           <button
             type="button"
             onClick={() => setExcludeTopFromScale((v) => !v)}
-            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold transition ${
+            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold pressable ${
               excludeTopFromScale
                 ? "bg-sky-600 text-white"
                 : "border border-[var(--line)] bg-white text-[var(--ink)] hover:bg-[#f8fafc]"
@@ -498,7 +501,7 @@ export default function ProvinceMap({
 
         <div className="flex w-full shrink-0 flex-col gap-3 xl:w-[min(100%,280px)]">
           <div className="rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
+            <p className="text-xs font-semibold text-[var(--muted)]">
               Legend · unmet intensity
             </p>
             <div
@@ -520,7 +523,7 @@ export default function ProvinceMap({
 
           {metrics.nonProvinces.length > 0 && (
             <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-amber-800">
+              <p className="text-xs font-semibold text-amber-800">
                 PMUs / directorates (not on map)
               </p>
               <ul className="mt-2 max-h-[200px] space-y-1 overflow-auto">
@@ -529,7 +532,7 @@ export default function ProvinceMap({
                     <button
                       type="button"
                       onClick={() => onDrill(p.name)}
-                      className="flex w-full items-center justify-between rounded-lg px-1 py-1 text-left text-xs hover:bg-amber-100/80"
+                      className="pressable flex w-full items-center justify-between rounded-lg px-1 py-1 text-left text-xs hover:bg-amber-100/80"
                     >
                       <span className="truncate pr-2" title={p.name}>
                         {shortLocation(p.name)}

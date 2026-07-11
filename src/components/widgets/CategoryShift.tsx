@@ -7,7 +7,7 @@ import type { MaterialRecord } from "@/lib/types";
 import { SectionHead } from "../ui";
 
 /** Design palette — assigned to categories by rank, not by name */
-const PALETTE = ["#0369a1", "#0f766e", "#d97706", "#64748b", "#7c3aed", "#be123c"];
+const PALETTE = ["#0369a1", "#0f766e", "#d97706", "#475569", "#0ea5e9", "#be123c"];
 
 interface CategoryShiftProps {
   rows: MaterialRecord[];
@@ -59,7 +59,7 @@ export default function CategoryShift({ rows, periods }: CategoryShiftProps) {
         {data.map((d) => (
           <span
             key={d.category}
-            className="inline-flex items-center gap-1.5 text-[11px] text-[var(--muted)]"
+            className="inline-flex items-center gap-1.5 text-[11px] text-(--muted)"
           >
             <span className="h-2 w-2 rounded-sm" style={{ background: colorOf(d.category) }} />
             {d.category}
@@ -68,10 +68,10 @@ export default function CategoryShift({ rows, periods }: CategoryShiftProps) {
       </div>
 
       {mover && (
-        <p className="mt-3 rounded-xl border border-[var(--line)] bg-[#f8fafc] px-3 py-2.5 text-sm text-[var(--muted)]">
-          Biggest shift: <strong className="text-[var(--ink)]">{mover.category}</strong> goes from{" "}
-          <strong className="text-[var(--ink)]">{pct(mover.share2026)}</strong> of {periods[0]}{" "}
-          demand to <strong className="text-[var(--ink)]">{pct(mover.share2730)}</strong> in{" "}
+        <p className="mt-3 rounded-xl border border-(--line) bg-(--surface-muted) px-3 py-2.5 text-sm text-(--muted)">
+          Biggest shift: <strong className="text-foreground">{mover.category}</strong> goes from{" "}
+          <strong className="text-foreground">{pct(mover.share2026)}</strong> of {periods[0]}{" "}
+          demand to <strong className="text-foreground">{pct(mover.share2730)}</strong> in{" "}
           {periods[1]} — plan capacity and contracts for where demand is heading, not where it is.
         </p>
       )}
@@ -91,14 +91,14 @@ function MixBar({
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
+        <span className="text-[10px] font-semibold text-(--muted)">
           {label}
         </span>
-        <span className="kpi-value text-[11px] text-[var(--muted)]">
+        <span className="kpi-value text-[11px] text-(--muted)">
           {fmt(data.reduce((a, d) => a + d.value, 0))} total
         </span>
       </div>
-      <div className="flex h-6 overflow-hidden rounded-lg bg-[#eef2f7]">
+      <div className="flex h-6 overflow-hidden rounded-lg bg-(--track)">
         {data.map(
           (d) =>
             d.share > 0 && (

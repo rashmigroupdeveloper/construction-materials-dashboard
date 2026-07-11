@@ -1,9 +1,16 @@
 import type { Filters, Period } from "./types";
 
 const VALID_PERIODS: Period[] = ["2026", "2730"];
+export type DashboardView = "triage" | "deep";
 
-export function parseDashboardUrl(searchParams: URLSearchParams): { filters: Filters } {
+const VALID_VIEWS: DashboardView[] = ["triage", "deep"];
+
+export function parseDashboardUrl(searchParams: URLSearchParams): {
+  filters: Filters;
+  view: DashboardView;
+} {
   const period = searchParams.get("period");
+  const view = searchParams.get("view");
 
   return {
     filters: {
@@ -12,16 +19,18 @@ export function parseDashboardUrl(searchParams: URLSearchParams): { filters: Fil
       material: searchParams.get("material") ?? "All",
       location: searchParams.get("location") ?? "All",
     },
+    view: VALID_VIEWS.includes(view as DashboardView) ? (view as DashboardView) : "triage",
   };
 }
 
-export function buildDashboardUrl(filters: Filters): string {
+export function buildDashboardUrl(filters: Filters, view: DashboardView = "triage"): string {
   const params = new URLSearchParams();
 
   if (filters.period !== "2026") params.set("period", filters.period);
   if (filters.project !== "All") params.set("project", filters.project);
   if (filters.material !== "All") params.set("material", filters.material);
   if (filters.location !== "All") params.set("location", filters.location);
+  if (view !== "triage") params.set("view", view);
 
   const qs = params.toString();
   return qs ? `?${qs}` : "";

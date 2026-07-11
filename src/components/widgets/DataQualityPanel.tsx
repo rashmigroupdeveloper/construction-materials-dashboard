@@ -27,7 +27,7 @@ export default function DataQualityPanel({
   const totalOk = totalSection.checks.every((c) => c.ok);
 
   return (
-    <div className="panel rise-in p-5" style={{ animationDelay: "120ms" }}>
+    <div className="panel p-5">
       <SectionHead
         title="Data integrity"
         subtitle="Recomputed from raw records on every fetch"
@@ -50,9 +50,9 @@ export default function DataQualityPanel({
       </div>
 
       {integrity.materialChecks.length > 0 && (
-        <div className="mt-3 rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
+        <div className="mt-3 rounded-xl border border-(--line) bg-(--surface-muted) p-3">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
+            <p className="text-[10px] font-semibold text-(--muted)">
               Sheet reconciliation · all metrics by material
             </p>
             <span
@@ -66,7 +66,7 @@ export default function DataQualityPanel({
           <ul className="mt-2 space-y-1">
             {integrity.materialChecks.map((c) => (
               <li key={c.material} className="flex items-center justify-between text-xs">
-                <span className="text-[var(--muted)]">{shortLabel(c.material)}</span>
+                <span className="text-(--muted)">{shortLabel(c.material)}</span>
                 <span className="kpi-value flex items-center gap-2 tabular-nums">
                   {metricSummary(c)}
                   {c.ok ? (
@@ -82,9 +82,9 @@ export default function DataQualityPanel({
       )}
 
       {totalSection.found && totalSection.checks.length > 0 && (
-        <div className="mt-3 rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
+        <div className="mt-3 rounded-xl border border-(--line) bg-(--surface-muted) p-3">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
+            <p className="text-[10px] font-semibold text-(--muted)">
               Appendix “{totalSection.title}” · all metrics by material
             </p>
             <span
@@ -98,7 +98,7 @@ export default function DataQualityPanel({
           <ul className="mt-2 space-y-1">
             {totalSection.checks.map((c) => (
               <li key={c.material} className="flex items-center justify-between text-xs">
-                <span className="text-[var(--muted)]">{shortLabel(c.material)}</span>
+                <span className="text-(--muted)">{shortLabel(c.material)}</span>
                 <span className="kpi-value flex items-center gap-2 tabular-nums">
                   {metricSummary(c)}
                   {c.ok ? (
@@ -111,7 +111,7 @@ export default function DataQualityPanel({
             ))}
           </ul>
           {!totalOk && (
-            <p className="mt-2 text-[11px] leading-relaxed text-[var(--muted)]">
+            <p className="mt-2 text-[11px] leading-relaxed text-(--muted)">
               The appendix&apos;s own total section disagrees with the sum of its detail
               sections. The dashboard shows sums recomputed from every detail row, so no
               data is lost — the drift above is in the source sheet itself.
@@ -184,14 +184,14 @@ function QualityChip({
   note?: string;
 }) {
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-[#f8fafc] p-3">
-      <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">{label}</p>
+    <div className="rounded-xl border border-(--line) bg-(--surface-muted) p-3">
+      <p className="text-[10px] font-semibold text-(--muted)">{label}</p>
       <p
         className={`kpi-value mt-1 text-lg font-bold ${good ? "" : "text-[var(--bad)]"}`}
       >
         {value}
       </p>
-      {note && <p className="mt-0.5 text-[10px] text-[var(--muted)]">{note}</p>}
+      {note && <p className="mt-0.5 text-[10px] text-(--muted)">{note}</p>}
     </div>
   );
 }

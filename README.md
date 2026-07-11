@@ -48,12 +48,13 @@ Google Sheet on every request.
 ## Features
 
 - Live data from Google Sheets (Refresh button + server revalidation)
-- **Story-first layout** — Overview / Analysis / Details tabs reduce cognitive load
-- **Shareable URLs** — filters and drill state sync to query params (`?material=…&location=…&view=details`)
-- KPI cards, province map, coverage heatmap, reallocation panel
+- **Triage / Deep dive modes** — default triage (map + shortages + decision); deep dive for charts, integrity, and table
+- **Shareable URLs** — filters, drill, and mode sync to query params (`?material=…&location=…&view=deep`)
+- Dense metric strip, province map, coverage heatmap, reallocation panel
 - Drill-down filters via chart clicks and breadcrumb trail
 - Concentration and outlier alerts for skewed distributions
 - Detail table with row-level drill
+- Keyboard: `1`/`2` period, `T`/`D` mode, `R` reset
 
 ### URL parameters
 
@@ -63,7 +64,7 @@ Google Sheet on every request.
 | `project` | sheet project name | `?project=…` |
 | `material` | sheet material name | `?material=Filling+sand` |
 | `location` | sheet locality | `?location=Can+Tho` |
-| `view` | `overview`, `analysis`, `details` | `?view=analysis` |
+| `view` | `triage`, `deep` | `?view=deep` |
 
 ## Build & deploy
 

@@ -38,13 +38,13 @@ export default function CoverageHeatmap({
         <table className="w-full min-w-[640px] border-separate border-spacing-1 text-xs">
           <thead>
             <tr>
-              <th className="px-2 py-1 text-left font-bold uppercase tracking-wide text-[10px] text-[var(--muted)]">
+              <th className="px-2 py-1 text-left font-semibold text-[10px] text-(--muted)">
                 Locality
               </th>
               {data.materials.map((m) => (
                 <th
                   key={m}
-                  className="px-1 py-1 text-center font-bold uppercase tracking-wide text-[10px] text-[var(--muted)]"
+                  className="px-1 py-1 text-center font-semibold text-[10px] text-(--muted)"
                 >
                   {shortLabel(m)}
                 </th>
@@ -54,7 +54,7 @@ export default function CoverageHeatmap({
           <tbody>
             {data.rows.map((row) => (
               <tr key={row.location}>
-                <td className="whitespace-nowrap px-2 py-1 font-semibold text-[var(--ink)]">
+                <td className="whitespace-nowrap px-2 py-1 font-semibold text-foreground">
                   {row.location}
                 </td>
                 {row.cells.map((cell) => (
@@ -65,7 +65,7 @@ export default function CoverageHeatmap({
           </tbody>
         </table>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-[var(--muted)]">
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-(--muted)">
         <LegendSwatch color={cellBackground(0.1)} label="< 50% covered" />
         <LegendSwatch color={cellBackground(0.75)} label="50–99%" />
         <LegendSwatch color={cellBackground(1.2)} label="≥ 100% (surplus)" />
@@ -108,7 +108,7 @@ function HeatCellButton({
             ? `${cell.location} · ${cell.material}\nDemand ${fmt(cell.demand)} · Supply ${fmt(cell.supply)} · Unmet ${fmt(cell.unmet)}`
             : `${cell.location} · ${cell.material}: no demand`
         }
-        className={`kpi-value block w-full rounded-lg px-1 py-2 text-center text-[11px] font-bold tabular-nums transition ${
+        className={`kpi-value block w-full rounded-lg px-1 py-2 text-center text-[11px] font-bold tabular-nums pressable ${
           hasDemand ? "cursor-pointer hover:ring-2 hover:ring-sky-400/60" : "cursor-default"
         }`}
         style={{ background: cellBackground(cell.coverage), color: cellColor(cell.coverage) }}

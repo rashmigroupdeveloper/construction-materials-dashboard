@@ -72,7 +72,7 @@ export default function TransferPanel({
               <button
                 type="button"
                 onClick={() => onDrillMaterial(d.name)}
-                className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#f8fafc]"
+                className="group w-full rounded-xl px-2 py-1.5 text-left pressable hover:bg-[#f8fafc]"
               >
                 <div className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="font-semibold text-[var(--ink)]">{shortLabel(d.name)}</span>
@@ -146,7 +146,7 @@ function LocalityList({
       }`}
     >
       <p
-        className={`text-[10px] font-bold uppercase tracking-wide ${
+        className={`text-xs font-semibold ${
           surplus ? "text-emerald-700" : "text-rose-700"
         }`}
       >
@@ -161,7 +161,7 @@ function LocalityList({
               <button
                 type="button"
                 onClick={() => onDrill(it.name)}
-                className="flex w-full items-baseline justify-between gap-2 rounded-lg px-1.5 py-1 text-xs transition hover:bg-white/70"
+                className="flex w-full items-baseline justify-between gap-2 rounded-lg px-1.5 py-1 text-xs pressable hover:bg-white/70"
               >
                 <span className="font-semibold text-[var(--ink)] underline-offset-2 hover:underline">
                   {it.name}

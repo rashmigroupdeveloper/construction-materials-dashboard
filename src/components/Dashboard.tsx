@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Bar,
@@ -31,8 +38,20 @@ import {
 } from "@/lib/aggregate";
 import { detectOutliers } from "@/lib/insights";
 import { compact, shortLabel, shortLocation } from "@/lib/labels";
-import { buildDashboardUrl, parseDashboardUrl, trailFromFilters } from "@/lib/url-state";
-import { ChartLegend, FilterSelect, KpiCard, SectionHead, SheetIcon } from "./ui";
+import {
+  buildDashboardUrl,
+  parseDashboardUrl,
+  trailFromFilters,
+  type DashboardView,
+} from "@/lib/url-state";
+import {
+  ChartLegend,
+  FilterSelect,
+  MetricStrip,
+  ModeTabs,
+  SectionHead,
+  SheetIcon,
+} from "./ui";
 import CategoryShift from "./widgets/CategoryShift";
 import CoverageHeatmap from "./widgets/CoverageHeatmap";
 import DataQualityPanel from "./widgets/DataQualityPanel";
@@ -62,39 +81,21 @@ type DrillStep = {
   label: string;
 };
 
-/** Numbered heading between page sections — the whole dashboard is one scroll */
-function SectionDivider({
-  index,
-  title,
-  desc,
-}: {
-  index: number;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <div className="mb-4 mt-9 flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1">
-      <span className="flex h-7 w-7 shrink-0 translate-y-1 items-center justify-center rounded-full bg-[var(--accent-deep)] text-xs font-black text-white">
-        {index}
-      </span>
-      <h2 className="font-display text-2xl font-semibold tracking-tight text-[var(--ink)]">
-        {title}
-      </h2>
-      <span className="text-sm text-[var(--muted)]">{desc}</span>
-    </div>
-  );
-}
-
 const tooltipStyle = {
   contentStyle: {
     border: "1px solid rgba(15,23,42,0.08)",
     borderRadius: 12,
-    background: "rgba(255,255,255,0.96)",
+    background: "#ffffff",
     boxShadow: "0 12px 32px rgba(15,23,42,0.12)",
     padding: "10px 12px",
   },
   itemStyle: { fontSize: 12, color: "#0f172a" },
-  labelStyle: { fontSize: 11, fontWeight: 700, color: "#64748b", marginBottom: 4 },
+  labelStyle: { fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 4 },
+};
+
+/** High-frequency chart updates: no entrance choreography (Emil) */
+const chartMotion = {
+  isAnimationActive: false as const,
 };
 
 export default function Dashboard() {
@@ -107,6 +108,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [view, setView] = useState<DashboardView>("triage");
   const [trail, setTrail] = useState<DrillStep[]>([]);
   const [excludeTopLoc, setExcludeTopLoc] = useState(false);
   const [hoverShare, setHoverShare] = useState<string | null>(null);
@@ -178,28 +180,64 @@ export default function Dashboard() {
   );
 
   const syncUrl = useCallback(
-    (nextFilters: Filters) => {
-      router.replace(`${pathname}${buildDashboardUrl(nextFilters)}`, { scroll: false });
+    (nextFilters: Filters, nextView: DashboardView = view) => {
+      router.replace(`${pathname}${buildDashboardUrl(nextFilters, nextView)}`, {
+        scroll: false,
+      });
     },
-    [pathname, router],
+    [pathname, router, view],
   );
 
   const applyDashboardState = useCallback(
-    (nextFilters: Filters, nextTrail: DrillStep[]) => {
+    (nextFilters: Filters, nextTrail: DrillStep[], nextView: DashboardView = view) => {
       setFilters(nextFilters);
       setTrail(nextTrail);
-      syncUrl(nextFilters);
+      setView(nextView);
+      syncUrl(nextFilters, nextView);
     },
-    [syncUrl],
+    [syncUrl, view],
+  );
+
+  const setDashboardView = useCallback(
+    (nextView: DashboardView) => {
+      setView(nextView);
+      syncUrl(filters, nextView);
+    },
+    [filters, syncUrl],
   );
 
   useEffect(() => {
     if (!data || urlHydrated.current) return;
     const parsed = parseDashboardUrl(searchParams);
     setFilters(parsed.filters);
+    setView(parsed.view);
     setTrail(trailFromFilters(parsed.filters, projectShort));
     urlHydrated.current = true;
   }, [data, searchParams, projectShort]);
+
+  /** Power-user shortcuts: 1/2 period, R reset (ignore when typing in inputs) */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
+        return;
+      }
+      if (e.key === "1") {
+        applyDashboardState({ ...filters, period: "2026" }, trail);
+      } else if (e.key === "2") {
+        applyDashboardState({ ...filters, period: "2730" }, trail);
+      } else if (e.key === "r" || e.key === "R") {
+        setExcludeTopLoc(false);
+        applyDashboardState(DEFAULT_FILTERS, [], view);
+      } else if (e.key === "t" || e.key === "T") {
+        setDashboardView("triage");
+      } else if (e.key === "d" || e.key === "D") {
+        setDashboardView("deep");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [applyDashboardState, filters, setDashboardView, trail, view]);
 
   /**
    * Demand split: sheet-summary sections vs the extra Appendix 2 blocks the
@@ -337,7 +375,7 @@ export default function Dashboard() {
     const nextTrail = sortTrail([...trail.filter((s) => s.key !== step.key), step]);
     const nextFilters = { ...filters, [step.key]: step.value };
     applyDashboardState(nextFilters, nextTrail);
-    if (opts?.scroll !== false) {
+    if (opts?.scroll === true) {
       queueMicrotask(scrollToTable);
     }
   }
@@ -355,7 +393,7 @@ export default function Dashboard() {
     };
     for (const s of nextTrail) nextFilters[s.key] = s.value;
     applyDashboardState(nextFilters, nextTrail);
-    if (opts?.scroll !== false) {
+    if (opts?.scroll === true) {
       queueMicrotask(scrollToTable);
     }
   }
@@ -383,31 +421,85 @@ export default function Dashboard() {
 
   function scrollToTable() {
     queueMicrotask(() => {
-      document.getElementById("detail-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      const reduce =
+        typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      document.getElementById("detail-table")?.scrollIntoView({
+        behavior: reduce ? "auto" : "smooth",
+        block: "start",
+      });
     });
   }
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-[var(--muted)]">
-        Loading live data from Google Sheets…
-      </div>
+      <main
+        id="main-content"
+        className="mx-auto max-w-[1520px] px-5 py-8 md:px-6"
+        aria-busy="true"
+        aria-label="Loading dashboard"
+      >
+        <div className="panel mb-5 overflow-hidden p-7 md:p-8">
+          <div className="skeleton h-9 w-72 max-w-full" />
+          <div className="skeleton mt-4 h-4 w-full max-w-xl" />
+          <div className="mt-5 flex flex-wrap gap-2">
+            <div className="skeleton h-10 w-40 rounded-full" />
+            <div className="skeleton h-10 w-44 rounded-full" />
+          </div>
+        </div>
+        <div className="panel mb-5 grid grid-cols-2 gap-3 p-3.5 md:grid-cols-5">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="space-y-2">
+              <div className="skeleton h-3 w-16" />
+              <div className="skeleton h-10 w-full rounded-xl" />
+            </div>
+          ))}
+        </div>
+        <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="panel p-4">
+              <div className="skeleton h-3 w-20" />
+              <div className="skeleton mt-3 h-8 w-28" />
+              <div className="skeleton mt-2 h-3 w-24" />
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="panel p-5">
+            <div className="skeleton h-5 w-40" />
+            <div className="skeleton mt-2 h-3 w-56" />
+            <div className="skeleton mt-5 h-48 w-full rounded-xl" />
+          </div>
+          <div className="panel p-5">
+            <div className="skeleton h-5 w-44" />
+            <div className="skeleton mt-2 h-3 w-52" />
+            <div className="mt-5 space-y-3">
+              {Array.from({ length: 5 }, (_, i) => (
+                <div key={i} className="skeleton h-8 w-full rounded-lg" />
+              ))}
+            </div>
+          </div>
+        </div>
+        <p className="mt-6 text-center text-sm text-(--muted)">
+          Loading live data from Google Sheets…
+        </p>
+      </main>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="mx-auto max-w-lg p-12 text-center">
-        <p className="font-semibold text-[var(--bad)]">Failed to load dashboard</p>
-        <p className="mt-2 text-sm text-[var(--muted)]">{error}</p>
+      <main id="main-content" className="mx-auto max-w-lg p-12 text-center">
+        <p className="font-semibold text-(--bad)">Failed to load dashboard</p>
+        <p className="mt-2 text-sm text-(--muted)">{error}</p>
         <button
           type="button"
           onClick={() => setReloadSeq((seq) => seq + 1)}
-          className="mt-4 rounded-full bg-[var(--accent-deep)] px-5 py-2.5 text-sm font-semibold text-white"
+          className="pressable pressable-hover-lift mt-4 rounded-xl bg-(--accent-deep) px-5 py-2.5 text-sm font-semibold text-white"
         >
           Retry
         </button>
-      </div>
+      </main>
     );
   }
 
@@ -424,22 +516,28 @@ export default function Dashboard() {
 
   return (
     <main id="main-content" className="mx-auto max-w-[1520px] px-5 py-8 md:px-6">
-      <header className="panel rise-in mb-5 overflow-hidden p-7 md:p-8">
+      <header className="panel mb-5 overflow-hidden p-6 md:p-7">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <h1 className="font-display text-3xl font-semibold tracking-tight text-[var(--ink)] md:text-4xl">
-              Construction Materials
-            </h1>
-            <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-[var(--muted)]">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
+                Construction Materials
+              </h1>
+              <ModeTabs value={view} onChange={setDashboardView} />
+            </div>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-(--muted)">
               Demand–supply intelligence. Unit:{" "}
-              <strong className="text-[var(--ink)]">{unit}</strong>.
+              <strong className="text-foreground">{unit}</strong>.
+              <span className="ml-2 hidden text-[11px] sm:inline">
+                Shortcuts: 1/2 period · T/D mode · R reset
+              </span>
             </p>
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               <a
                 href={data.source.sheetUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-full bg-[#0f9d58] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-110"
+                className="inline-flex items-center gap-2 rounded-xl bg-[#0f9d58] px-4 py-2 text-sm font-semibold text-white pressable pressable-hover-lift"
               >
                 <SheetIcon />
                 Open Google Sheet
@@ -449,16 +547,14 @@ export default function Dashboard() {
               </a>
               <a
                 href={`https://docs.google.com/spreadsheets/d/${data.source.sheetId}/export?format=xlsx`}
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-bold text-[var(--ink)] transition hover:bg-[#f8fafc]"
+                className="inline-flex items-center gap-2 rounded-xl border border-(--line) bg-white px-4 py-2 text-sm font-semibold text-foreground pressable hover:bg-(--surface-muted)"
               >
-                Download Excel (.xlsx)
+                Download Excel
               </a>
             </div>
           </div>
-          <div className="rounded-2xl border border-[var(--line)] bg-[#f8fafc] px-4 py-3 text-right">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--muted)]">
-              Last fetch
-            </p>
+          <div className="rounded-xl border border-(--line) bg-(--surface-muted) px-4 py-3 text-right">
+            <p className="text-xs font-semibold text-(--muted)">Last fetch</p>
             <p className="kpi-value mt-1 text-sm font-semibold">
               {new Date(data.source.fetchedAt).toLocaleString()}
             </p>
@@ -466,7 +562,7 @@ export default function Dashboard() {
               href={data.source.sheetUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-2 inline-block text-[11px] font-semibold text-[var(--accent-deep)] underline underline-offset-2"
+              className="mt-2 inline-block text-[11px] font-semibold text-(--accent-deep) underline underline-offset-2 link-pressable"
             >
               View source sheet
             </a>
@@ -474,20 +570,17 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* What is unmet */}
-      <div className="panel mb-5 border-l-4 border-l-rose-500 p-4 md:px-5">
-        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-rose-600">
-          What is unmet?
-        </p>
-        <p className="mt-1.5 text-sm leading-relaxed text-[var(--muted)]">
-          <strong className="text-[var(--ink)]">Unmet</strong> = shortage where demand exceeds
+      <div className="callout callout-danger mb-5">
+        <p className="text-xs font-semibold text-rose-800">What is unmet?</p>
+        <p className="mt-1 text-sm leading-relaxed text-(--muted)">
+          <strong className="text-foreground">Unmet</strong> = shortage where demand exceeds
           supply:{" "}
-          <span className="kpi-value font-semibold text-[var(--ink)]">
+          <span className="kpi-value font-semibold text-foreground">
             max(Demand − Supply, 0)
           </span>
           . Surplus locations (supply &gt; demand) count as <strong>0</strong> unmet — they do not
           cancel shortages elsewhere.{" "}
-          <strong className="text-[var(--ink)]">Balance</strong> = Supply − Demand (can be
+          <strong className="text-foreground">Balance</strong> = Supply − Demand (can be
           negative). Unit: {unit}.
         </p>
       </div>
@@ -517,7 +610,7 @@ export default function Dashboard() {
               const nextTrail = trail.filter((s) => s.key !== "project");
               applyDashboardState({ ...filters, project: "All" }, nextTrail);
             } else {
-              drillTo({ key: "project", value: v, label: projectShort(v) }, { scroll: false });
+              drillTo({ key: "project", value: v, label: projectShort(v) });
             }
           }}
         />
@@ -533,7 +626,7 @@ export default function Dashboard() {
               const nextTrail = trail.filter((s) => s.key !== "material");
               applyDashboardState({ ...filters, material: "All" }, nextTrail);
             } else {
-              drillTo({ key: "material", value: v, label: v }, { scroll: false });
+              drillTo({ key: "material", value: v, label: v });
             }
           }}
         />
@@ -549,7 +642,7 @@ export default function Dashboard() {
               const nextTrail = trail.filter((s) => s.key !== "location");
               applyDashboardState({ ...filters, location: "All" }, nextTrail);
             } else {
-              drillTo({ key: "location", value: v, label: v }, { scroll: false });
+              drillTo({ key: "location", value: v, label: v });
             }
           }}
         />
@@ -557,14 +650,14 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={resetFilters}
-            className="w-full rounded-xl border border-[var(--line)] bg-white px-3 py-2.5 text-sm font-bold text-[var(--ink)] transition hover:bg-[#f8fafc]"
+            className="w-full rounded-xl border border-(--line) bg-white px-3 py-2.5 text-sm font-semibold text-foreground pressable hover:bg-(--surface-muted)"
           >
             Reset
           </button>
           <button
             type="button"
             onClick={() => setReloadSeq((seq) => seq + 1)}
-            className="w-full rounded-xl bg-[var(--accent-deep)] px-3 py-2.5 text-sm font-bold text-white transition hover:brightness-110"
+            className="w-full rounded-xl bg-(--accent-deep) px-3 py-2.5 text-sm font-semibold text-white pressable pressable-hover-lift"
           >
             Refresh
           </button>
@@ -576,15 +669,13 @@ export default function Dashboard() {
         aria-label="Drill path"
         className="panel mb-5 flex flex-wrap items-center gap-2 px-4 py-3 text-sm"
       >
-        <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--muted)]">
-          Drill
-        </span>
+        <span className="text-xs font-semibold text-(--muted)">Drill</span>
         <button
           type="button"
           onClick={() => goBreadcrumb(-1)}
-          className={`rounded-full px-3 py-1 text-xs font-bold transition ${
+          className={`rounded-lg px-3 py-1 text-xs font-semibold pressable ${
             trail.length === 0
-              ? "bg-sky-600 text-white"
+              ? "bg-(--accent-deep) text-white"
               : "bg-sky-50 text-sky-800 hover:bg-sky-100"
           }`}
         >
@@ -592,13 +683,13 @@ export default function Dashboard() {
         </button>
         {trail.map((step, i) => (
           <span key={`${step.key}-${step.value}`} className="inline-flex items-center gap-2">
-            <span className="text-[var(--muted)]">›</span>
+            <span className="text-(--muted)">›</span>
             <button
               type="button"
               onClick={() => goBreadcrumb(i)}
-              className={`rounded-full px-3 py-1 text-xs font-bold transition ${
+              className={`rounded-lg px-3 py-1 text-xs font-semibold pressable ${
                 i === trail.length - 1
-                  ? "bg-sky-600 text-white"
+                  ? "bg-(--accent-deep) text-white"
                   : "bg-slate-100 text-slate-700 hover:bg-slate-200"
               }`}
             >
@@ -610,24 +701,27 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => goBreadcrumb(trail.length - 2)}
-            className="ml-auto text-xs font-semibold text-[var(--muted)] underline"
+            className="ml-auto text-xs font-semibold text-(--muted) underline link-pressable"
           >
             ← Back
           </button>
         )}
         <button
           type="button"
-          onClick={scrollToTable}
-          className="rounded-full border border-[var(--line)] px-3 py-1 text-xs font-semibold text-[var(--ink)] hover:bg-[#f8fafc]"
+          onClick={() => {
+            setDashboardView("deep");
+            queueMicrotask(scrollToTable);
+          }}
+          className="pressable rounded-lg border border-(--line) px-3 py-1 text-xs font-semibold text-foreground hover:bg-(--surface-muted)"
         >
-          View rows ↓
+          View rows
         </button>
       </nav>
 
       {/* Outlier watch — single records big enough to distort every KPI */}
       {outliers.length > 0 && (
-        <div className="rise-in mb-5 flex flex-wrap items-center gap-3 rounded-2xl border border-amber-300/80 bg-gradient-to-r from-amber-50 to-white px-5 py-4 text-sm text-amber-950">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[11px] font-black text-white">
+        <div className="state-in callout callout-warn mb-5 flex flex-wrap items-center gap-3 text-sm text-amber-950">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[11px] font-bold text-white">
             !
           </span>
           <p className="min-w-0 flex-1">
@@ -637,7 +731,7 @@ export default function Dashboard() {
                 {i > 0 && ", "}
                 <button
                   type="button"
-                  className="font-bold underline underline-offset-2"
+                  className="font-semibold underline underline-offset-2 link-pressable"
                   onClick={() =>
                     drillPath([
                       { key: "material", value: o.record.material, label: o.record.material },
@@ -656,7 +750,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => setExcludeOutliers((v) => !v)}
-            className={`shrink-0 rounded-full px-4 py-2 text-xs font-bold transition ${
+            className={`shrink-0 rounded-lg px-4 py-2 text-xs font-semibold pressable ${
               excludeOutliers
                 ? "bg-amber-600 text-white hover:brightness-110"
                 : "border border-amber-400 bg-white text-amber-900 hover:bg-amber-50"
@@ -668,8 +762,8 @@ export default function Dashboard() {
       )}
 
       {topLocShare > CONCENTRATION_ALERT_SHARE && byLocation[0] && (
-        <div className="rise-in mb-5 flex gap-3 rounded-2xl border border-rose-200/80 bg-gradient-to-r from-rose-50 to-white px-5 py-4 text-sm text-rose-900">
-          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-rose-600 text-[11px] font-black text-white">
+        <div className="state-in callout callout-danger mb-5 flex gap-3 text-sm text-rose-900">
+          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-rose-600 text-[11px] font-bold text-white">
             !
           </span>
           <p>
@@ -678,7 +772,7 @@ export default function Dashboard() {
             ).{" "}
             <button
               type="button"
-              className="font-bold underline"
+              className="font-semibold underline link-pressable"
               onClick={() =>
                 drillTo({
                   key: "location",
@@ -693,81 +787,71 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-5">
-        <KpiCard
-          label="Total demand"
-          value={fmt(t.demand)}
-          sub={`${pLabel}, ${unit}${excludeOutliers ? " · excl. outliers" : ""}`}
-          delay={0}
-        />
-        <KpiCard label="Supply capacity" value={fmt(t.supply)} sub="Available capacity" delay={1} />
-        <KpiCard
-          label="Unmet demand"
-          value={fmt(t.unmet)}
-          sub="max(D − S, 0)"
-          hot
-          delay={2}
-        />
-        <KpiCard label="Net balance" value={fmt(t.balance)} sub="Supply − demand" delay={3} />
-        <KpiCard
-          label="Coverage"
-          value={pct(coverage)}
-          sub={excludeOutliers ? "Supply ÷ demand · excl. outliers" : "Supply ÷ demand"}
-          delay={4}
-        />
-      </div>
+      <MetricStrip
+        items={[
+          {
+            label: "Total demand",
+            value: fmt(t.demand),
+            sub: `${pLabel}, ${unit}${excludeOutliers ? " · excl. outliers" : ""}`,
+          },
+          { label: "Supply capacity", value: fmt(t.supply), sub: "Available capacity" },
+          { label: "Unmet demand", value: fmt(t.unmet), sub: "max(D − S, 0)", hot: true },
+          { label: "Net balance", value: fmt(t.balance), sub: "Supply − demand" },
+          {
+            label: "Coverage",
+            value: pct(coverage),
+            sub: excludeOutliers ? "Supply ÷ demand · excl. outliers" : "Supply ÷ demand",
+          },
+        ]}
+      />
 
-      {/* Bridge to the sheet's own summary tab, so the larger totals here never
-          read as a data mismatch — shown only at full (unfiltered) scope */}
-      {kpiBridge && kpiBridge.extras.length > 0 &&
+      {kpiBridge &&
+        kpiBridge.extras.length > 0 &&
         filters.project === "All" &&
         filters.material === "All" &&
         filters.location === "All" && (
-          <div className="panel mb-5 border-l-4 border-l-sky-500 px-4 py-3 text-xs leading-relaxed text-[var(--muted)]">
-            <strong className="text-[var(--ink)]">
+          <div className="callout callout-info mb-5 text-xs leading-relaxed text-(--muted)">
+            <strong className="text-foreground">
               Why total demand here is larger than the sheet’s Dashboard tab:
             </strong>{" "}
             that tab counts only the three main sections —{" "}
-            <span className="kpi-value font-semibold text-[var(--ink)]">
+            <span className="kpi-value font-semibold text-foreground">
               {fmt(kpiBridge.main)}
             </span>{" "}
             demand in {pLabel}. This dashboard also includes{" "}
             {kpiBridge.extras.map(([cat, v], i) => (
               <span key={cat}>
                 {i > 0 && " and "}
-                <strong className="text-[var(--ink)]">{cat}</strong> (+{fmt(v)})
+                <strong className="text-foreground">{cat}</strong> (+{fmt(v)})
               </span>
             ))}
             , which exist in Appendix 2 but are missing from the sheet’s own summary. Together:{" "}
-            <span className="kpi-value font-semibold text-[var(--ink)]">
+            <span className="kpi-value font-semibold text-foreground">
               {fmt(kpiBridge.total)}
             </span>
             . Nothing is double-counted — use the Project filter to view any group alone.
           </div>
         )}
 
-      <SectionDivider
-        index={1}
-        title="Map command center"
-        desc="Click a province — every chart and table below follows"
-      />
-      <div id="section-map" className="mb-5">
+      {view === "triage" ? (
+      <div
+        id="section-triage"
+        role="tabpanel"
+        aria-labelledby="mode-tab-triage"
+        className="mb-5 space-y-5"
+      >
+      <div id="section-map">
         <ProvinceMap
           locationAgg={byLocationAll}
           periodLabel={pLabel}
           selectedLocation={filters.location}
           materialFilter={filters.material}
-          onDrill={(l) => drillTo({ key: "location", value: l, label: l }, { scroll: false })}
+          onDrill={(l) => drillTo({ key: "location", value: l, label: l })}
         />
       </div>
 
-      <SectionDivider
-        index={2}
-        title="Overview"
-        desc="The big picture — where the shortages are"
-      />
-      <div id="section-overview" className="mb-5 space-y-5">
-      <div className="panel rise-in p-5" style={{ animationDelay: "80ms" }}>
+      <div id="section-overview" className="space-y-5">
+      <div className="panel p-5">
           <SectionHead
             title={
               drillLevel === "overview"
@@ -781,11 +865,11 @@ export default function Dashboard() {
             subtitle={`For ${pLabel} · ${scoped.length} records in scope`}
           />
 
-          <p className="mt-3 text-sm leading-relaxed text-[var(--muted)]">
-            Demand <strong className="text-[var(--ink)]">{fmt(t.demand)}</strong> vs supply{" "}
-            <strong className="text-[var(--ink)]">{fmt(t.supply)}</strong> → coverage{" "}
-            <strong className="text-[var(--ink)]">{pct(coverage)}</strong>, unmet{" "}
-            <strong className="text-[var(--bad)]">{fmt(t.unmet)}</strong> ({unit}).
+          <p className="mt-3 text-sm leading-relaxed text-(--muted)">
+            Demand <strong className="text-foreground">{fmt(t.demand)}</strong> vs supply{" "}
+            <strong className="text-foreground">{fmt(t.supply)}</strong> → coverage{" "}
+            <strong className="text-foreground">{pct(coverage)}</strong>, unmet{" "}
+            <strong className="text-(--bad)">{fmt(t.unmet)}</strong> ({unit}).
           </p>
 
           {drillLevel === "overview" && dominant && topLoc && (
@@ -796,13 +880,13 @@ export default function Dashboard() {
                   onClick={() =>
                     drillTo({ key: "material", value: dominant.name, label: dominant.name })
                   }
-                  className="rounded-xl border border-rose-200/80 bg-rose-50/60 px-3 py-2.5 text-left transition hover:border-rose-300 hover:bg-rose-50"
+                  className="rounded-xl border border-rose-200/80 bg-rose-50/60 px-3 py-2.5 text-left pressable hover:border-rose-300 hover:bg-rose-50"
                 >
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-rose-600">
+                  <p className="text-xs font-semibold text-rose-700">
                     Material driver
                   </p>
-                  <p className="mt-0.5 text-sm font-bold text-[var(--ink)]">{dominant.name}</p>
-                  <p className="kpi-value mt-0.5 text-xs text-[var(--muted)]">
+                  <p className="mt-0.5 text-sm font-bold text-foreground">{dominant.name}</p>
+                  <p className="kpi-value mt-0.5 text-xs text-(--muted)">
                     {pct(dominant.share)} of unmet · {fmt(dominant.value)}
                   </p>
                 </button>
@@ -811,13 +895,13 @@ export default function Dashboard() {
                   onClick={() =>
                     drillTo({ key: "location", value: topLoc.name, label: topLoc.name })
                   }
-                  className="rounded-xl border border-amber-200/80 bg-amber-50/60 px-3 py-2.5 text-left transition hover:border-amber-300 hover:bg-amber-50"
+                  className="rounded-xl border border-amber-200/80 bg-amber-50/60 px-3 py-2.5 text-left pressable hover:border-amber-300 hover:bg-amber-50"
                 >
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                  <p className="text-xs font-semibold text-amber-800">
                     Location driver
                   </p>
-                  <p className="mt-0.5 text-sm font-bold text-[var(--ink)]">{topLoc.name}</p>
-                  <p className="kpi-value mt-0.5 text-xs text-[var(--muted)]">
+                  <p className="mt-0.5 text-sm font-bold text-foreground">{topLoc.name}</p>
+                  <p className="kpi-value mt-0.5 text-xs text-(--muted)">
                     {pct(topLocShare)} of unmet · {fmt(topLoc.unmet)}
                   </p>
                 </button>
@@ -830,7 +914,7 @@ export default function Dashboard() {
                     { key: "location", value: topLoc.name, label: topLoc.name },
                   ])
                 }
-                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent-deep)] px-4 py-2.5 text-sm font-bold text-white transition hover:brightness-110"
+                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-(--accent-deep) px-4 py-2.5 text-sm font-semibold text-white pressable pressable-hover-lift"
               >
                 Drill {dominant.name} → {topLoc.name}
                 <span aria-hidden>→</span>
@@ -840,12 +924,12 @@ export default function Dashboard() {
 
           {drillLevel === "material" && (
             <div className="mt-3 space-y-2">
-              <p className="text-sm text-[var(--muted)]">
-                Scoped to <strong className="text-[var(--ink)]">{filters.material}</strong>
+              <p className="text-sm text-(--muted)">
+                Scoped to <strong className="text-foreground">{filters.material}</strong>
                 {nextLocUnderMaterial ? (
                   <>
                     . Top shortage locality:{" "}
-                    <strong className="text-[var(--ink)]">{nextLocUnderMaterial.name}</strong> (
+                    <strong className="text-foreground">{nextLocUnderMaterial.name}</strong> (
                     {t.unmet
                       ? pct(nextLocUnderMaterial.unmet / t.unmet)
                       : "—"}{" "}
@@ -865,7 +949,7 @@ export default function Dashboard() {
                       label: nextLocUnderMaterial.name,
                     })
                   }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent-deep)] px-4 py-2.5 text-sm font-bold text-white transition hover:brightness-110"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-(--accent-deep) px-4 py-2.5 text-sm font-bold text-white pressable pressable-hover-lift"
                 >
                   Next: drill into {nextLocUnderMaterial.name}
                   <span aria-hidden>→</span>
@@ -876,12 +960,12 @@ export default function Dashboard() {
 
           {drillLevel === "location" && (
             <div className="mt-3 space-y-2">
-              <p className="text-sm text-[var(--muted)]">
-                Scoped to <strong className="text-[var(--ink)]">{filters.location}</strong>
+              <p className="text-sm text-(--muted)">
+                Scoped to <strong className="text-foreground">{filters.location}</strong>
                 {filters.material !== "All" ? (
                   <>
                     {" "}
-                    × <strong className="text-[var(--ink)]">{filters.material}</strong>
+                    × <strong className="text-foreground">{filters.material}</strong>
                   </>
                 ) : null}
                 . {scoped.length} detail rows below — click material chips to narrow further.
@@ -892,7 +976,7 @@ export default function Dashboard() {
                   onClick={() =>
                     drillTo({ key: "material", value: dominant.name, label: dominant.name })
                   }
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent-deep)] px-4 py-2.5 text-sm font-bold text-white transition hover:brightness-110"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-(--accent-deep) px-4 py-2.5 text-sm font-bold text-white pressable pressable-hover-lift"
                 >
                   Next: filter {dominant.name} here
                   <span aria-hidden>→</span>
@@ -901,17 +985,20 @@ export default function Dashboard() {
               {filters.material !== "All" && (
                 <button
                   type="button"
-                  onClick={scrollToTable}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--line)] bg-white px-4 py-2.5 text-sm font-bold text-[var(--ink)] transition hover:bg-[#f8fafc]"
+                  onClick={() => {
+                    setDashboardView("deep");
+                    queueMicrotask(scrollToTable);
+                  }}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-(--line) bg-white px-4 py-2.5 text-sm font-semibold text-foreground pressable hover:bg-(--surface-muted)"
                 >
-                  View {scoped.length} detail rows ↓
+                  View {scoped.length} detail rows
                 </button>
               )}
             </div>
           )}
 
           {drillLevel === "project" && (
-            <p className="mt-3 text-sm text-[var(--muted)]">
+            <p className="mt-3 text-sm text-(--muted)">
               Scoped to project type. Use material / location charts to continue drilling.
             </p>
           )}
@@ -943,6 +1030,7 @@ export default function Dashboard() {
                       paddingAngle={2.5}
                       stroke="#fff"
                       strokeWidth={3}
+                      {...chartMotion}
                       onMouseEnter={(_, i) => setHoverShare(shareRows[i]?.name ?? null)}
                       onMouseLeave={() => setHoverShare(null)}
                       onClick={(_, index) => {
@@ -968,24 +1056,23 @@ export default function Dashboard() {
                                 x={cx}
                                 y={cy - 16}
                                 textAnchor="middle"
-                                className="fill-[var(--muted)]"
+                                className="fill-(--muted)"
                                 style={{
-                                  fontSize: 9,
-                                  fontWeight: 700,
-                                  letterSpacing: "0.14em",
+                                  fontSize: 10,
+                                  fontWeight: 600,
                                 }}
                               >
-                                TOTAL UNMET
+                                Total unmet
                               </text>
                               <text
                                 x={cx}
                                 y={cy + 6}
                                 textAnchor="middle"
-                                className="fill-[var(--ink)]"
+                                className="fill-foreground"
                                 style={{
                                   fontSize: 22,
                                   fontWeight: 600,
-                                  fontFamily: "var(--font-fraunces), Georgia, serif",
+                                  fontFamily: "ui-sans-serif, system-ui, sans-serif",
                                 }}
                               >
                                 {fmt(t.unmet)}
@@ -994,7 +1081,7 @@ export default function Dashboard() {
                                 x={cx}
                                 y={cy + 24}
                                 textAnchor="middle"
-                                className="fill-[var(--muted)]"
+                                className="fill-(--muted)"
                                 style={{ fontSize: 10 }}
                               >
                                 {unit}
@@ -1006,6 +1093,7 @@ export default function Dashboard() {
                     </Pie>
                     <Tooltip
                       {...tooltipStyle}
+                      animationDuration={150}
                       formatter={(v, _n, item) => {
                         const row = item?.payload as { share?: number } | undefined;
                         return [`${fmt(Number(v))} (${pct(row?.share ?? 0)})`, "Unmet"];
@@ -1017,13 +1105,13 @@ export default function Dashboard() {
             </div>
 
             <div className="flex min-w-0 flex-1 flex-col justify-center gap-2.5">
-              <div className="flex h-3 overflow-hidden rounded-full bg-[#eef2f7]">
+              <div className="flex h-3 overflow-hidden rounded-full bg-(--track)">
                 {shareRows.map((d) => (
                   <button
                     key={d.name}
                     type="button"
                     title={`${d.name}: ${pct(d.share)}`}
-                    className="h-full transition-[filter] duration-200 hover:brightness-110"
+                    className="h-full pressable scrub-opacity"
                     style={{
                       width: `${Math.max(d.share * 100, 0.8)}%`,
                       background: d.color,
@@ -1041,7 +1129,7 @@ export default function Dashboard() {
                   <li key={d.name}>
                     <button
                       type="button"
-                      className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#f8fafc]"
+                      className="group w-full rounded-xl px-2 py-1.5 text-left pressable scrub-opacity hover:bg-(--surface-muted)"
                       onMouseEnter={() => setHoverShare(d.name)}
                       onMouseLeave={() => setHoverShare(null)}
                       onClick={() => drillTo({ key: "material", value: d.name, label: d.name })}
@@ -1055,9 +1143,9 @@ export default function Dashboard() {
                             className="h-2.5 w-2.5 shrink-0 rounded-full"
                             style={{ background: d.color }}
                           />
-                          <span className="truncate text-sm font-semibold text-[var(--ink)]">
-                            <span className="mr-1.5 text-[10px] font-bold text-[var(--muted)]">
-                              {String(i + 1).padStart(2, "0")}
+                          <span className="truncate text-sm font-semibold text-foreground">
+                            <span className="mr-1.5 text-[11px] font-semibold text-(--muted)">
+                              {i + 1}.
                             </span>
                             {d.name}
                           </span>
@@ -1070,13 +1158,15 @@ export default function Dashboard() {
                         <div className="share-track flex-1">
                           <div
                             className="share-fill"
-                            style={{
-                              width: `${d.share * 100}%`,
-                              background: d.color,
-                            }}
+                            style={
+                              {
+                                "--share": d.share,
+                                background: d.color,
+                              } as CSSProperties
+                            }
                           />
                         </div>
-                        <span className="kpi-value w-[4.5rem] text-right text-[11px] text-[var(--muted)]">
+                        <span className="kpi-value w-18 text-right text-[11px] text-(--muted)">
                           {fmt(d.value)}
                         </span>
                       </div>
@@ -1106,10 +1196,10 @@ export default function Dashboard() {
               <button
                 type="button"
                 onClick={() => setExcludeTopLoc((v) => !v)}
-                className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold transition ${
+                className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-bold pressable ${
                   excludeTopLoc
                     ? "bg-sky-600 text-white"
-                    : "border border-[var(--line)] bg-white text-[var(--ink)] hover:bg-[#f8fafc]"
+                    : "border border-(--line) bg-white text-foreground hover:bg-[#f8fafc]"
                 }`}
               >
                 {excludeTopLoc ? "Show #1 again" : "Hide #1 · see peers"}
@@ -1123,7 +1213,7 @@ export default function Dashboard() {
               onClick={() =>
                 drillTo({ key: "location", value: hiddenTopLoc.name, label: hiddenTopLoc.name })
               }
-              className="mt-3 flex w-full items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-left text-xs transition hover:bg-rose-50"
+              className="mt-3 flex w-full items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50/70 px-3 py-2 text-left text-xs pressable hover:bg-rose-50"
             >
               <span>
                 <span className="font-bold text-rose-800">#1 {hiddenTopLoc.name}</span>
@@ -1139,15 +1229,15 @@ export default function Dashboard() {
                 <button
                   type="button"
                   onClick={() => drillTo({ key: "location", value: d.name, label: d.name })}
-                  className="group w-full rounded-xl px-2 py-1.5 text-left transition hover:bg-[#fff1f2]"
+                  className="group w-full rounded-xl px-2 py-1.5 text-left pressable hover:bg-[#fff1f2]"
                   title={`${d.name} · unmet ${fmt(d.unmet)} · ${pct(d.shareOfScope)} of scope`}
                 >
                   <div className="flex items-baseline justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="w-5 shrink-0 text-[10px] font-bold tabular-nums text-[var(--muted)]">
-                        {String(d.rank).padStart(2, "0")}
+                      <span className="w-5 shrink-0 text-[11px] font-semibold tabular-nums text-(--muted)">
+                        {d.rank}.
                       </span>
-                      <span className="truncate text-sm font-semibold text-[var(--ink)] group-hover:text-rose-800">
+                      <span className="truncate text-sm font-semibold text-foreground group-hover:text-rose-800">
                         {d.short}
                       </span>
                     </div>
@@ -1155,35 +1245,41 @@ export default function Dashboard() {
                       <span className="kpi-value text-[11px] font-bold text-rose-700">
                         {pct(d.shareOfScope)}
                       </span>
-                      <span className="kpi-value w-[3.6rem] text-right text-xs text-[var(--muted)]">
+                      <span className="kpi-value w-[3.6rem] text-right text-xs text-(--muted)">
                         {fmt(d.unmet)}
                       </span>
                     </div>
                   </div>
                   <div className="mt-1.5 ml-7 h-1.5 overflow-hidden rounded-full bg-[#eef2f7]">
                     <div
-                      className="h-full rounded-full transition-[width] duration-500"
-                      style={{ width: `${d.barPct}%`, background: d.color }}
+                      className="bar-fill"
+                      style={
+                        {
+                          "--bar": d.barPct / 100,
+                          background: d.color,
+                        } as CSSProperties
+                      }
                     />
                   </div>
                 </button>
               </li>
             ))}
             {locationRank.length === 0 && (
-              <li className="px-2 py-6 text-center text-sm text-[var(--muted)]">
+              <li className="px-2 py-6 text-center text-sm text-(--muted)">
                 No unmet shortage in this scope
               </li>
             )}
           </ul>
         </div>
       </div>
-
-      <SectionDivider
-        index={3}
-        title="Charts & comparisons"
-        desc="Materials, periods and priorities side by side"
-      />
-      <div id="section-analysis" className="mb-5 space-y-5">
+      </div>
+      ) : (
+      <div
+        id="section-deep"
+        role="tabpanel"
+        aria-labelledby="mode-tab-deep"
+        className="mb-5 space-y-5"
+      >
       <div className="grid gap-5 lg:grid-cols-2">
         <TransferPanel
           rows={scoped}
@@ -1208,20 +1304,21 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                 <XAxis
                   dataKey="material"
-                  tick={{ fontSize: 11, fill: "#64748b" }}
+                  tick={{ fontSize: 11, fill: "#475569" }}
                   axisLine={false}
                   tickLine={false}
                   interval={0}
                 />
                 <YAxis
                   tickFormatter={(v) => compact(v)}
-                  tick={{ fontSize: 11, fill: "#94a3b8" }}
+                  tick={{ fontSize: 11, fill: "#64748b" }}
                   axisLine={false}
                   tickLine={false}
                   width={44}
                 />
                 <Tooltip
                   {...tooltipStyle}
+                  animationDuration={150}
                   formatter={(v) => fmt(Number(v))}
                   cursor={{ fill: "rgba(14,165,233,0.06)" }}
                 />
@@ -1240,6 +1337,7 @@ export default function Dashboard() {
                     fill={fill}
                     radius={[4, 4, 0, 0]}
                     maxBarSize={28}
+                    {...chartMotion}
                     onClick={(_, index) => {
                       const item = periodCompare[index ?? 0];
                       if (item)
@@ -1265,64 +1363,6 @@ export default function Dashboard() {
         </div>
 
         <div className="panel p-5">
-          <SectionHead title={`Gap bridge · ${pLabel}`} subtitle="Demand → supply → unmet" />
-          <div className="mt-4 h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={[
-                  { name: "Demand", value: t.demand, fill: DEMAND_COLOR },
-                  { name: "Supply", value: t.supply, fill: SUPPLY_COLOR },
-                  { name: "Unmet", value: t.unmet, fill: UNMET_COLOR },
-                ]}
-                margin={{ left: 4, right: 8, bottom: 8, top: 8 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fontSize: 12, fill: "#64748b" }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tickFormatter={(v) => compact(v)}
-                  tick={{ fontSize: 11, fill: "#94a3b8" }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={44}
-                />
-                <Tooltip
-                  {...tooltipStyle}
-                  formatter={(v) => fmt(Number(v))}
-                  cursor={{ fill: "rgba(14,165,233,0.06)" }}
-                />
-                <Bar dataKey="value" radius={[10, 10, 0, 0]} maxBarSize={72}>
-                  {[DEMAND_COLOR, SUPPLY_COLOR, UNMET_COLOR].map((c) => (
-                    <Cell key={c} fill={c} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
-            {[
-              { l: "Demand", v: fmt(t.demand), tip: "Required volume" },
-              { l: "Supply", v: fmt(t.supply), tip: "Available capacity" },
-              { l: "Unmet", v: fmt(t.unmet), tip: "Shortage only" },
-            ].map((x) => (
-              <div key={x.l} className="rounded-xl bg-[#f8fafc] px-2 py-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-[var(--muted)]">
-                  {x.l}
-                </p>
-                <p className="kpi-value mt-0.5 font-bold">{x.v}</p>
-                <p className="mt-0.5 text-[10px] text-[var(--muted)]">{x.tip}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-5 grid gap-5 lg:grid-cols-2">
-        <div className="panel p-5">
           <SectionHead
             title={
               filters.material !== "All"
@@ -1340,20 +1380,21 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                 <XAxis
                   dataKey="short"
-                  tick={{ fontSize: 11, fill: "#64748b" }}
+                  tick={{ fontSize: 11, fill: "#475569" }}
                   axisLine={false}
                   tickLine={false}
                   interval={0}
                 />
                 <YAxis
                   tickFormatter={(v) => compact(v)}
-                  tick={{ fontSize: 11, fill: "#94a3b8" }}
+                  tick={{ fontSize: 11, fill: "#64748b" }}
                   axisLine={false}
                   tickLine={false}
                   width={44}
                 />
                 <Tooltip
                   {...tooltipStyle}
+                  animationDuration={150}
                   formatter={(v) => fmt(Number(v))}
                   labelFormatter={(_, payload) => {
                     const p = payload?.[0]?.payload as { name?: string } | undefined;
@@ -1367,6 +1408,7 @@ export default function Dashboard() {
                   fill={DEMAND_COLOR}
                   radius={[6, 6, 0, 0]}
                   maxBarSize={36}
+                  {...chartMotion}
                   onClick={(_, index) => {
                     const item = byMaterial[index ?? 0];
                     if (item) drillTo({ key: "material", value: item.name, label: item.name });
@@ -1378,6 +1420,7 @@ export default function Dashboard() {
                   fill={SUPPLY_COLOR}
                   radius={[6, 6, 0, 0]}
                   maxBarSize={36}
+                  {...chartMotion}
                   onClick={(_, index) => {
                     const item = byMaterial[index ?? 0];
                     if (item) drillTo({ key: "material", value: item.name, label: item.name });
@@ -1453,8 +1496,8 @@ export default function Dashboard() {
                     };
                     return (
                       <div className="chart-tooltip">
-                        <p className="text-xs font-bold text-[var(--ink)]">{p.name}</p>
-                        <p className="mt-1 text-[11px] text-[var(--muted)]">
+                        <p className="text-xs font-bold text-foreground">{p.name}</p>
+                        <p className="mt-1 text-[11px] text-(--muted)">
                           Coverage {pct(p.coverage)} · Unmet {fmt(p.unmet)} · Demand {fmt(p.demand)}
                         </p>
                         <p className="mt-1 text-[10px] font-semibold text-sky-700">Click to drill</p>
@@ -1467,6 +1510,7 @@ export default function Dashboard() {
                   data={scatterData}
                   fill="#0f766e"
                   fillOpacity={0.75}
+                  {...chartMotion}
                   onClick={(d) => {
                     const pt = d as { name?: string };
                     if (pt.name)
@@ -1477,14 +1521,7 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-      </div>
 
-      <SectionDivider
-        index={4}
-        title="Detail rows & data checks"
-        desc="Every record, plus proof the numbers match the sheet"
-      />
-      <div id="section-details" className="mb-5 space-y-5">
         <DataQualityPanel
           integrity={data.integrity}
           recordsInScope={scoped.length}
@@ -1504,12 +1541,13 @@ export default function Dashboard() {
         }
       />
 
-      <div id="detail-table" className="panel mb-5 scroll-mt-24 overflow-hidden">
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
+      <div id="detail-table" className="panel scroll-mt-24 overflow-hidden">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-(--line) px-5 py-4">
           <div>
-            <h2 className="font-display text-lg font-semibold">Detail records</h2>
-            <p className="text-sm text-[var(--muted)]">
+            <h2 className="text-lg font-semibold">Detail records</h2>
+            <p className="text-sm text-(--muted)">
               {scoped.length} rows
+              {scoped.length > 200 ? " · showing top 200 by unmet" : ""}
               {trail.length > 0 ? ` · filtered by ${trail.map((s) => s.label).join(" › ")}` : ""}
               {excludeOutliers && outliers.length > 0
                 ? ` · ${outliers.length} outlier record(s) hidden`
@@ -1520,7 +1558,7 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => goBreadcrumb(-1)}
-              className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-bold text-sky-800"
+              className="pressable rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-100"
             >
               Clear drill
             </button>
@@ -1528,15 +1566,15 @@ export default function Dashboard() {
         </div>
         <div className="max-h-[420px] overflow-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-[#f8fafc] text-left text-[10px] uppercase tracking-wider text-[#64748b]">
+            <thead className="sticky top-0 bg-(--surface-muted) text-left text-xs font-semibold text-(--muted)">
               <tr>
-                <th className="px-4 py-3 font-bold">Location</th>
-                <th className="px-4 py-3 font-bold">Material</th>
-                <th className="px-4 py-3 font-bold">Project</th>
-                <th className="px-4 py-3 text-right font-bold">Demand</th>
-                <th className="px-4 py-3 text-right font-bold">Supply</th>
-                <th className="px-4 py-3 text-right font-bold">Unmet</th>
-                <th className="px-4 py-3 text-right font-bold">Coverage</th>
+                <th className="px-4 py-3">Location</th>
+                <th className="px-4 py-3">Material</th>
+                <th className="px-4 py-3">Project</th>
+                <th className="px-4 py-3 text-right">Demand</th>
+                <th className="px-4 py-3 text-right">Supply</th>
+                <th className="px-4 py-3 text-right">Unmet</th>
+                <th className="px-4 py-3 text-right">Coverage</th>
               </tr>
             </thead>
             <tbody>
@@ -1546,12 +1584,12 @@ export default function Dashboard() {
                 .map((r) => (
                   <tr
                     key={r.id}
-                    className="border-t border-[var(--line)] transition hover:bg-[#f0f9ff]"
+                    className="border-t border-(--line) ui-transition hover:bg-[#f0f9ff]"
                   >
                     <td className="px-4 py-2.5">
                       <button
                         type="button"
-                        className="font-medium text-sky-800 underline-offset-2 hover:underline"
+                        className="font-medium text-sky-800 underline-offset-2 link-pressable hover:underline"
                         onClick={() =>
                           drillTo({ key: "location", value: r.location, label: r.location })
                         }
@@ -1570,7 +1608,7 @@ export default function Dashboard() {
                     <td className="px-4 py-2.5">
                       <button
                         type="button"
-                        className="text-sky-800 underline-offset-2 hover:underline"
+                        className="text-sky-800 underline-offset-2 link-pressable hover:underline"
                         onClick={() =>
                           drillTo({ key: "material", value: r.material, label: r.material })
                         }
@@ -1579,14 +1617,14 @@ export default function Dashboard() {
                       </button>
                     </td>
                     <td
-                      className="max-w-[200px] truncate px-4 py-2.5 text-[var(--muted)]"
+                      className="max-w-[200px] truncate px-4 py-2.5 text-(--muted)"
                       title={r.project}
                     >
                       {shortLabel(r.project)}
                     </td>
                     <td className="kpi-value px-4 py-2.5 text-right">{fmt(r[f.d])}</td>
                     <td className="kpi-value px-4 py-2.5 text-right">{fmt(r[f.s])}</td>
-                    <td className="kpi-value px-4 py-2.5 text-right font-semibold text-[var(--bad)]">
+                    <td className="kpi-value px-4 py-2.5 text-right font-semibold text-(--bad)">
                       {fmt(r[f.u])}
                     </td>
                     <td className="kpi-value px-4 py-2.5 text-right">{pct(r[f.c])}</td>
@@ -1597,8 +1635,9 @@ export default function Dashboard() {
         </div>
       </div>
       </div>
+      )}
 
-      <footer className="panel mb-2 flex flex-wrap items-center justify-between gap-3 px-5 py-4 text-xs text-[var(--muted)]">
+      <footer className="panel mb-2 flex flex-wrap items-center justify-between gap-3 px-5 py-4 text-xs text-(--muted)">
         <p>
           Source: Google Sheet {data.source.recordsFrom} (all sections) · {data.meta.recordCount}{" "}
           records · {data.integrity.zeroRowsDropped} zero rows dropped ·{" "}
@@ -1609,14 +1648,14 @@ export default function Dashboard() {
             href={data.source.sheetUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-full bg-[#0f9d58] px-3 py-1.5 font-bold text-white"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#0f9d58] px-3 py-1.5 font-semibold text-white pressable"
           >
             <SheetIcon className="h-3.5 w-3.5" />
             Open sheet ↗
           </a>
           <a
             href={`https://docs.google.com/spreadsheets/d/${data.source.sheetId}/export?format=xlsx`}
-            className="inline-flex items-center rounded-full border border-[var(--line)] bg-white px-3 py-1.5 font-bold text-[var(--ink)]"
+            className="inline-flex items-center rounded-xl border border-(--line) bg-white px-3 py-1.5 font-semibold text-foreground pressable"
           >
             Download Excel
           </a>
